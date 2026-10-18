@@ -182,4 +182,32 @@ This log records architectural decisions, rationale, deviations, and edge cases 
 - **Consequences**:
   - Predictable, deterministic state synthesis with 100% code integrity and guaranteed termination.
 
+---
+
+## ADR-0009: SQLite Working Memory & Target Envelopes with 3-Line Handshake
+
+- **Date**: 2026-10-18
+- **Status**: Accepted
+- **Context**:
+  Transitioning state capsules into persistent working memory and downstream model envelopes requires addressing three critical friction points:
+  1. Multi-hop continuity requires storing versioned states ($v_1 \to v_2 \to \dots \to v_n$) per conversation with instant rollback and auditability.
+  2. Target models (Claude, Gemini) suffer cognitive amnesia upon receiving new prompts, asking "How can I help you today?" or re-proposing approaches previously ruled out.
+  3. Artifacts containing markdown or shell code with 3 backticks (` ``` `) break target UI rendering when formatted with standard triple backticks (Gotcha #6).
+- **Decision**:
+  1. Implement `SQLiteStore` in `src/store/db.ts` utilizing Node 24 native `node:sqlite` (`DatabaseSync`), bypassing native C++ compilation dependencies while delivering high-speed indexed storage.
+  2. Implement `getSafeFence(code)` to calculate $\max(\text{run}) + 1$ (minimum 3), wrapping inner backticks safely.
+  3. Format Claude envelopes with structured XML tags (`<handoff>`, `<context>`, `<ruled_out>`, `<artifact lang="..." label="...">`, `<next_step>`).
+  4. Format Gemini/Markdown envelopes with clean Markdown headings and dynamic code fences.
+  5. Enforce the mandatory **3-Line Handshake Directive** in all target envelopes:
+     - 1. Do NOT restart the task, re-ask settled questions, or re-propose anything listed in `<ruled_out>`.
+     - 2. Begin your VERY FIRST reply with a 3-line state confirmation: Goal, Current State, Next Step.
+     - 3. Immediately after those 3 lines, execute the Next Step.
+- **Alternatives Rejected**:
+  - *Native better-sqlite3 module*: Node-gyp build failures on Windows machines without MSVC C++ tools.
+  - *Static 3-backtick code fences*: Truncates code blocks prematurely whenever an artifact contains nested fences.
+  - *Free-form conversation dumps*: Triggers immediate restart loops in target LLMs.
+- **Consequences**:
+  - Persistent, versioned state storage and reliable cross-provider execution without conversational amnesia.
+
+
 
