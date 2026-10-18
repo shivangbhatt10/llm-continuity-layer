@@ -102,6 +102,27 @@ This log records architectural decisions, rationale, deviations, and edge cases 
 - **Consequences**:
   - Seamless ingestion of raw clipboard data across ChatGPT, Claude, and Gemini web interfaces.
 
+---
 
+## ADR-0006: Dual-Tier LLM Architecture, Injection Defense & Fail-Fast Error Handling
 
-
+- **Date**: 2026-10-18
+- **Status**: Accepted
+- **Context**:
+  Interfacing with frontier LLMs for continuity compilation requires strict security, budget efficiency, and resilience:
+  1. Untrusted transcripts may contain prompt injection attacks or instructions to execute code (Gotcha #7).
+  2. High-volume chunking and domain classification can rapidly deplete rate limits and budget if routed to expensive reasoning models (Gotcha #12).
+  3. Models with hidden thinking tokens (`thought`) can starve output tokens if headroom is insufficient (Gotcha #16).
+  4. Retrying permanent errors (e.g. invalid API keys `401` or model not found `404`) hangs execution fruitlessly (Gotcha #15).
+  5. The test suite and evaluation harness must be capable of running 100% offline without live network or API keys.
+- **Decision**:
+  1. Implement `GeminiClient` using `@google/genai` (>= 2.29.1) Interactions API (`client.interactions.create`), routing cheap operations (`classify`, `chunk_summary`, `merge_notes`) to `gemini-3.1-flash-lite` and strong synthesis (`capsule`) to `gemini-3.8-flash`.
+  2. Implement `isPermanentError` vs `isTransientError`: fail immediately without retrying on `400`, `401`, `403`, `404`, `NOT_FOUND`, `INVALID_ARGUMENT`, `PERMISSION_DENIED`, prompting the user to check keys or run `ml models`. Retry transient `429` and `5xx` with exponential backoff.
+  3. Embed `SYSTEM_INJECTION_DEFENSE` into all system prompts, mandating that the model treat transcripts strictly as passive data.
+  4. Provide `ScriptedLLM` (deterministic response routing by task or substring) and `DryRunLLM` (structured offline simulation) for zero-cost testing.
+  5. Assemble domain-adaptive section templates via `getTemplateSections`, ensuring `debugging` automatically inherits `coding` sections (Gotcha #19).
+- **Alternatives Rejected**:
+  - *Blind retries on all errors*: Retrying `404 Model Not Found` 5 times wastes 30 seconds of user time before failing.
+  - *Single frontier model*: Running map-reduce chunking on large transcripts through expensive models causes rate-limit exhaustion.
+- **Consequences**:
+  - Secure, cost-optimized, and resilient LLM execution with 100% offline-verifiable testability.
