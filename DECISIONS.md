@@ -153,3 +153,33 @@ This log records architectural decisions, rationale, deviations, and edge cases 
 - **Consequences**:
   - 100% verbatim preservation of active codebase state with zero code corruption.
 
+---
+
+## ADR-0008: Dual-Mode Guaranteed-Termination Chunking & Tolerant Capsule Assembly
+
+- **Date**: 2026-10-18
+- **Status**: Accepted
+- **Context**:
+  Synthesizing concise, high-fidelity state capsules from varied conversation lengths poses multiple failure modes:
+  1. Passing 50+ turn transcripts directly into a single prompt triggers context degradation and lost-in-the-middle hallucination.
+  2. Recursive map-reduce summarization can enter infinite loops if the LLM's summarized output fails to decrease in length (Gotcha #11).
+  3. Single oversized turns (e.g. pasted logs or large files) break token windows.
+  4. Raw LLM responses often contain code snippets with internal `#` comments (e.g. `// ## Goal:` or `# Section`), which break naive regex section splitters (Gotcha #8).
+  5. Code artifacts paraphrased by models incur silent syntax errors and dropped edge cases (Gotcha #10).
+- **Decision**:
+  1. Implement dual-mode summarization in `chunk_summarize.ts`:
+     - `direct` mode for short conversations (<12,000 chars), bypassing intermediate chunk summaries.
+     - `notes` mode for long conversations: partition into chunks, extract bullet notes via `gemini-3.1-flash-lite`, and hierarchically merge notes.
+  2. Guarantee termination in `mergeChunkNotes`: batch merge under character limits, and if a reduction round fails to decrease the note count, force pairwise merging of the first two notes.
+  3. Partition single oversized messages into `(part k/n)` chunks on line boundaries.
+  4. In `capsule.ts`, parse sections tolerantly by matching headings only when outside code fences and only when matching an expected domain template section. Default missing sections to `"Not established in the conversation."` and track in `meta.missing_sections`.
+  5. Zero-touch verbatim artifact preservation: code artifacts extracted via AST/regex are spliced directly into `capsule.artifacts` without LLM paraphrase.
+  6. Enforce turn budgeting in `selectRecentTurns`: always retain at least the last 2 turns, truncating individual oversized turns 40% head / 60% tail with `[... middle omitted ...]`.
+- **Alternatives Rejected**:
+  - *Unbounded recursive summarization*: Risks infinite loops when model outputs plateau in size.
+  - *Paraphrasing code artifacts*: Causes code drift, syntax corruption, and dropped error handlers.
+  - *Naive heading regex*: Breaks section parsing when code blocks contain `#` comments.
+- **Consequences**:
+  - Predictable, deterministic state synthesis with 100% code integrity and guaranteed termination.
+
+
