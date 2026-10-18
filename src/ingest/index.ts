@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Conversation } from "../core/schema.js";
 import { parseScrapedMarkdown } from "./scraped_md.js";
 import { loadChatGPTExport } from "./chatgpt_export.js";
+import { parsePaste } from "./paste_parser.js";
 
 export type IngestFormat = "scraped_md" | "chatgpt_export" | "paste" | "unknown";
 
@@ -89,8 +90,7 @@ export async function loadConversations(targetPath: string): Promise<Conversatio
     case "chatgpt_export":
       return loadChatGPTExport(targetPath);
     case "paste":
-      // Delegated to paste_parser (M3b)
-      return [parseScrapedMarkdown(content, path.basename(targetPath, path.extname(targetPath)))];
+      return [parsePaste(content, path.basename(targetPath, path.extname(targetPath)))];
     default:
       throw new Error(`Unsupported or unrecognized transcript format in ${targetPath}`);
   }

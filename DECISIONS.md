@@ -83,5 +83,25 @@ This log records architectural decisions, rationale, deviations, and edge cases 
 - **Consequences**:
   - Deterministic ingestion of scraped markdown with complete fence isolation and metadata verification.
 
+---
+
+## ADR-0005: Fence-Aware Clipboard Paste Parser & Fallback Degradation
+
+- **Date**: 2026-10-18
+- **Status**: Accepted
+- **Context**:
+  Users frequently copy transcripts directly from browser web interfaces into their clipboard (Gotcha #5). These pastes use varying speaker marker conventions (`You said: / ChatGPT said:` for ChatGPT, `Human: / Claude: / Assistant:` for Claude, `User: / Gemini:` for Gemini). Code snippets pasted inside these transcripts frequently contain comments or string literals containing speaker tokens (e.g., `// User: fix bug`).
+- **Decision**:
+  1. Maintain strict code fence state tracking (` ``` ` and ` ~~~ `). Speaker markers are evaluated only when outside active fences.
+  2. Normalize diverse provider labels to canonical roles (`user` vs `assistant`).
+  3. When zero speaker markers are found across the input, gracefully degrade to a single turn with `role: "unknown"`, preserving the full text and setting `meta.parse_warning`.
+  4. Automatically derive a conversation title from the first non-empty message line (truncated to 80 chars).
+- **Alternatives Rejected**:
+  - *Naive regex turn splitting*: Slices code snippets whenever a comment or string literal contains a speaker token.
+  - *Throwing an error on unstructured pastes*: Degrades user experience when pasting plain queries or single-reply transcripts.
+- **Consequences**:
+  - Seamless ingestion of raw clipboard data across ChatGPT, Claude, and Gemini web interfaces.
+
+
 
 
