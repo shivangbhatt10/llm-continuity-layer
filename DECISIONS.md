@@ -41,3 +41,23 @@ This log records architectural decisions, rationale, deviations, and edge cases 
 - **Consequences**:
   - Downstream ingest modules receive a clean, single chronological array of nodes.
 
+---
+
+## ADR-0003: ChatGPT Export Sanitization & Consecutive Node Merging
+
+- **Date**: 2026-10-18
+- **Status**: Accepted
+- **Context**:
+  Raw ChatGPT export files contain internal system messages, hidden browsing display artifacts, and thinking steps (Gotcha #2). Furthermore, assistant replies containing code execution are frequently split across multiple consecutive nodes (prose followed by a separate `code` node). Without merging, this violates the alternating `user/assistant` conversation invariant required by Anthropic Claude and Google Gemini APIs (Gotcha #3). Exports may also arrive as single `.json` files, sharded directories (`conversations-000.json`), or `.zip` archives (Gotcha #4).
+- **Decision**:
+  1. Filter out `system` roles, nodes marked `is_visually_hidden_from_conversation === true`, and internal content types (`thoughts`, `reasoning_recap`, `tether_browsing_display`, `system_error`).
+  2. Automatically merge consecutive `assistant` nodes into a single coherent turn, formatting `code` content types into fenced blocks with their language tag.
+  3. Truncate raw `tool` outputs exceeding 2,000 characters to prevent context window saturation while preserving head and tail diagnostic traces.
+  4. Implement multi-format loading for single JSON, sharded JSON folders, and `.zip` archives using built-in Windows `tar` utility to avoid heavy native dependencies.
+- **Alternatives Rejected**:
+  - *Leaving split assistant nodes as separate messages*: Rejected because Claude and Gemini APIs reject consecutive turns of the same role without synthetic padding.
+  - *Adding third-party native zip extraction packages*: Rejected to keep the Node.js toolchain portable and native across Windows, Linux, and macOS without node-gyp build failures.
+- **Consequences**:
+  - Clean `Conversation[]` AST ready for multi-domain classification and token compaction.
+
+
