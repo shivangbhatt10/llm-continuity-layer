@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+dist/
+
+# Environment and secrets (Gotcha #13)
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# SQLite Databases & Working Memory
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Test artifacts and logs
+coverage/
+*.log
+npm-debug.log*
+
+# OS Files
+.DS_Store
+Thumbs.db
