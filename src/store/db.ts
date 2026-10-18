@@ -17,6 +17,7 @@ export interface ConversationStore {
   getLatestCapsule(conversationId: string): VersionedCapsule | null;
   getCapsuleByVersion(conversationId: string, version: number): VersionedCapsule | null;
   listCapsules(): CapsuleSummary[];
+  close(): void;
 }
 
 export class SQLiteStore implements ConversationStore {
@@ -25,6 +26,10 @@ export class SQLiteStore implements ConversationStore {
   constructor(dbPath: string = ":memory:") {
     this.db = new DatabaseSync(dbPath);
     this.initSchema();
+  }
+
+  close(): void {
+    this.db.close();
   }
 
   private initSchema(): void {

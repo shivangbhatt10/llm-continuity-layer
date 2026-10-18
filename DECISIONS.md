@@ -209,5 +209,30 @@ This log records architectural decisions, rationale, deviations, and edge cases 
 - **Consequences**:
   - Persistent, versioned state storage and reliable cross-provider execution without conversational amnesia.
 
+---
+
+## ADR-0010: Developer CLI Architecture & Windows SQLite Lock Management
+
+- **Date**: 2026-10-18
+- **Status**: Accepted
+- **Context**:
+  Engineers require an ergonomic, zero-friction terminal interface (`ml list`, `ml capsule`, `ml show`, `ml models`) to manage session continuity workflows. Crucially:
+  1. On Windows platforms, unclosed SQLite database file handles trigger `EBUSY` resource lock errors during temporary directory deletion or concurrent access.
+  2. The CLI must maintain privacy guarantees (Gotcha #13) by printing a prominent notice before transmitting transcript contents over the network.
+  3. Developers must be able to simulate full handoffs offline using `--dry-run` with zero API keys.
+- **Decision**:
+  1. Implement `runCLI` in `src/cli.ts` supporting programmatic invocation for unit testing and direct invocation via `process.argv`.
+  2. Implement explicit `close(): void` on `ConversationStore` and `SQLiteStore` to release file handles immediately after database transactions conclude.
+  3. Provide `ml list` to discover conversations across JSON files, sharded directories, and `.zip` archives.
+  4. Provide `ml capsule` with `--target claude|gemini|markdown`, `--dry-run`, `--save`, and `--out <file>` options.
+  5. Provide `ml show <id>` to inspect versioned working memory states from SQLite.
+  6. Provide `ml models` to display active two-tier model routing and hint at API key setup if running offline (Gotcha #15).
+- **Alternatives Rejected**:
+  - *Platform-specific shell scripts*: Fragile across PowerShell, Bash, and Windows command prompt.
+  - *Leaving SQLite handles open*: Triggers persistent EBUSY file locking crashes on Windows.
+- **Consequences**:
+  - Fast, portable, and offline-testable developer CLI with clean resource lifecycle management.
+
+
 
 

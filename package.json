@@ -4,10 +4,14 @@
   "description": "Cross-Provider LLM Continuity & Memory Layer",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "ml": "./dist/cli.js"
+  },
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "build": "tsc"
+    "build": "tsc",
+    "cli": "tsx src/cli.ts"
   },
   "dependencies": {
     "@google/genai": "^2.29.1",
