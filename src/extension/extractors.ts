@@ -71,42 +71,94 @@ export function cleanTurnContent(html: string): string {
 
 /**
  * Extracts conversation turns from ChatGPT HTML / articles.
+ * Resilient to modern 2024-2026 ChatGPT DOM updates.
  */
 export function extractChatGPTFromHTML(html: string): ExtractedTurn[] {
   const turns: ExtractedTurn[] = [];
 
-  // Match conversation turn containers or data-message-author-role blocks
-  const turnRegex =
-    /<(?:article|div)[^>]*data-message-author-role="(user|assistant)"[^>]*>([\s\S]*?)<\/(?:article|div)>/gi;
-  let match: RegExpExecArray | null;
+  // 1. Scan for <article> blocks or conversation-turn containers
+  const articleRegex = /<article[^>]*>([\s\S]*?)<\/article>/gi;
+  let articleMatch: RegExpExecArray | null;
 
-  while ((match = turnRegex.exec(html)) !== null) {
-    const role = match[1].toLowerCase() === "user" ? "user" : "assistant";
-    const rawContent = match[2];
-    const content = cleanTurnContent(rawContent);
-    if (content) {
-      turns.push({ role, content });
+  while ((articleMatch = articleRegex.exec(html)) !== null) {
+    const block = articleMatch[1];
+    let role: "user" | "assistant" | null = null;
+
+    if (
+      /data-message-author-role="user"/i.test(block) ||
+      />\s*You\s+said:?\s*</i.test(block) ||
+      /<h[1-6][^>]*class="[^"]*sr-only[^"]*"[^>]*>\s*You said:?\s*<\/h[1-6]>/i.test(block)
+    ) {
+      role = "user";
+    } else if (
+      /data-message-author-role="assistant"/i.test(block) ||
+      />\s*(?:ChatGPT|Assistant)\s+said:?\s*</i.test(block) ||
+      /<h[1-6][^>]*class="[^"]*sr-only[^"]*"[^>]*>\s*(?:ChatGPT|Assistant) said:?\s*<\/h[1-6]>/i.test(block)
+    ) {
+      role = "assistant";
+    } else if (/<div[^>]*class="[^"]*markdown[^"]*"[^>]*>/i.test(block)) {
+      role = "assistant";
+    } else if (/<div[^>]*class="[^"]*whitespace-pre-wrap[^"]*"[^>]*>/i.test(block)) {
+      role = "user";
+    }
+
+    if (role) {
+      // Strip accessibility heading before cleaning content
+      const cleanBlock = block.replace(
+        /<(?:h[1-6]|div|span)[^>]*>(?:You said|ChatGPT said|Assistant said):?<\/(?:h[1-6]|div|span)>/gi,
+        ""
+      );
+      const content = cleanTurnContent(cleanBlock);
+      if (content) {
+        turns.push({ role, content });
+      }
     }
   }
 
-  // Fallback: search for data-testid="conversation-turn-..." if author-role wasn't matched on parent
+  // 2. Fallback: match direct data-message-author-role blocks
   if (turns.length === 0) {
-    const articleRegex = /<article[^>]*>([\s\S]*?)<\/article>/gi;
-    let articleMatch: RegExpExecArray | null;
-    while ((articleMatch = articleRegex.exec(html)) !== null) {
-      const articleContent = articleMatch[1];
-      const role = /data-message-author-role="user"/i.test(articleContent)
-        ? "user"
-        : /data-message-author-role="assistant"/i.test(articleContent)
-        ? "assistant"
-        : null;
+    const turnRegex =
+      /<(?:article|div|section)[^>]*data-message-author-role="(user|assistant)"[^>]*>([\s\S]*?)<\/(?:article|div|section)>/gi;
+    let match: RegExpExecArray | null;
 
-      if (role) {
-        const content = cleanTurnContent(articleContent);
-        if (content) {
-          turns.push({ role, content });
-        }
+    while ((match = turnRegex.exec(html)) !== null) {
+      const role = match[1].toLowerCase() === "user" ? "user" : "assistant";
+      const content = cleanTurnContent(match[2]);
+      if (content) {
+        turns.push({ role, content });
       }
+    }
+  }
+
+  // 3. Fallback: Parse speaker markers from lines
+  if (turns.length === 0) {
+    const lines = html.replace(/<[^>]+>/g, "\n").split("\n");
+    let currentRole: "user" | "assistant" | null = null;
+    let currentLines: string[] = [];
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) continue;
+
+      if (/^You said:?$/i.test(line)) {
+        if (currentRole && currentLines.length > 0) {
+          turns.push({ role: currentRole, content: currentLines.join("\n").trim() });
+          currentLines = [];
+        }
+        currentRole = "user";
+      } else if (/^(?:ChatGPT|Assistant) said:?$/i.test(line)) {
+        if (currentRole && currentLines.length > 0) {
+          turns.push({ role: currentRole, content: currentLines.join("\n").trim() });
+          currentLines = [];
+        }
+        currentRole = "assistant";
+      } else if (currentRole) {
+        currentLines.push(line);
+      }
+    }
+
+    if (currentRole && currentLines.length > 0) {
+      turns.push({ role: currentRole, content: currentLines.join("\n").trim() });
     }
   }
 
@@ -119,9 +171,8 @@ export function extractChatGPTFromHTML(html: string): ExtractedTurn[] {
 export function extractClaudeFromHTML(html: string): ExtractedTurn[] {
   const turns: ExtractedTurn[] = [];
 
-  // Regex to extract user messages and assistant messages sequentially
   const messageRegex =
-    /<div[^>]*(data-testid="user-message"|class="[^"]*font-claude-message[^"]*")[^>]*>([\s\S]*?)<\/div>/gi;
+    /<div[^>]*(data-testid="user-message"|class="[^"]*(?:font-claude-message|font-user-message|standard-markdown)[^"]*")[^>]*>([\s\S]*?)<\/div>/gi;
   let match: RegExpExecArray | null;
 
   while ((match = messageRegex.exec(html)) !== null) {
@@ -165,7 +216,6 @@ export function extractGeminiFromHTML(html: string): ExtractedTurn[] {
 export function extractActiveSession(doc: Document = document): SessionExtraction {
   const platform = detectPlatform(window.location.hostname);
   let title = doc.title || "Active AI Session";
-  // Clean platform suffix from title (e.g. "Fixing bug - ChatGPT" -> "Fixing bug")
   title = title
     .replace(/\s*-\s*ChatGPT$/i, "")
     .replace(/\s*\|\s*Claude$/i, "")
@@ -175,18 +225,62 @@ export function extractActiveSession(doc: Document = document): SessionExtractio
   let turns: ExtractedTurn[] = [];
 
   if (platform === "chatgpt") {
-    // Query DOM nodes directly
-    const turnElements = doc.querySelectorAll("[data-message-author-role]");
-    turnElements.forEach((el) => {
-      const role = el.getAttribute("data-message-author-role") === "user" ? "user" : "assistant";
-      const content = cleanTurnContent(el.innerHTML);
-      if (content) turns.push({ role, content });
-    });
+    // 1. Check <article> elements
+    const articles = doc.querySelectorAll("article, [data-testid^='conversation-turn']");
+    if (articles.length > 0) {
+      articles.forEach((art, idx) => {
+        let role: "user" | "assistant" | null = null;
+        const authorAttr =
+          art.querySelector("[data-message-author-role]")?.getAttribute("data-message-author-role") ||
+          art.getAttribute("data-message-author-role");
+
+        if (authorAttr === "user" || authorAttr === "assistant") {
+          role = authorAttr as "user" | "assistant";
+        } else {
+          const textHeader = art.querySelector("h5, h6, .sr-only")?.textContent || "";
+          if (/you said/i.test(textHeader)) {
+            role = "user";
+          } else if (/chatgpt said|assistant said/i.test(textHeader)) {
+            role = "assistant";
+          } else if (art.querySelector(".markdown")) {
+            role = "assistant";
+          } else if (art.querySelector(".whitespace-pre-wrap")) {
+            role = "user";
+          } else {
+            role = idx % 2 === 0 ? "user" : "assistant";
+          }
+        }
+
+        const clone = art.cloneNode(true) as HTMLElement;
+        clone.querySelectorAll(".sr-only, h5, h6").forEach((el) => {
+          if (/said/i.test(el.textContent || "")) el.remove();
+        });
+
+        const targetContainer =
+          role === "assistant" && clone.querySelector(".markdown")
+            ? clone.querySelector(".markdown")!
+            : role === "user" && clone.querySelector(".whitespace-pre-wrap")
+            ? clone.querySelector(".whitespace-pre-wrap")!
+            : clone;
+
+        const content = cleanTurnContent(targetContainer.innerHTML);
+        if (content) turns.push({ role, content });
+      });
+    }
+
+    // 2. Direct attribute fallback
+    if (turns.length === 0) {
+      const turnElements = doc.querySelectorAll("[data-message-author-role]");
+      turnElements.forEach((el) => {
+        const role = el.getAttribute("data-message-author-role") === "user" ? "user" : "assistant";
+        const content = cleanTurnContent(el.innerHTML);
+        if (content) turns.push({ role, content });
+      });
+    }
   } else if (platform === "claude") {
-    const userNodes = doc.querySelectorAll('[data-testid="user-message"], .font-user-message');
-    const assistantNodes = doc.querySelectorAll(".font-claude-message");
-    // Interleave turns by vertical document order
-    const all = Array.from(doc.querySelectorAll('[data-testid="user-message"], .font-user-message, .font-claude-message'));
+    const all = Array.from(
+      doc.querySelectorAll('[data-testid="user-message"], .font-user-message, .font-claude-message')
+    );
     all.sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
     all.forEach((el) => {
       const isUser = el.matches('[data-testid="user-message"], .font-user-message');
@@ -194,7 +288,10 @@ export function extractActiveSession(doc: Document = document): SessionExtractio
       if (content) turns.push({ role: isUser ? "user" : "assistant", content });
     });
   } else if (platform === "gemini") {
-    const allTurns = doc.querySelectorAll(".user-query-container, .model-response-text, user-query, model-response");
+    const allTurns = Array.from(
+      doc.querySelectorAll(".user-query-container, .model-response-text, user-query, model-response")
+    );
+    allTurns.sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
     allTurns.forEach((el) => {
       const isUser = el.className.includes("user-query") || el.tagName.toLowerCase() === "user-query";
       const content = cleanTurnContent(el.innerHTML);
@@ -202,9 +299,9 @@ export function extractActiveSession(doc: Document = document): SessionExtractio
     });
   }
 
-  // Fallback to HTML string extractor if querySelectorAll returned empty due to DOM shadow roots
-  if (turns.length === 0) {
-    const bodyHtml = doc.body ? doc.body.innerHTML : "";
+  // Universal HTML and text fallback
+  if (turns.length === 0 && doc.body) {
+    const bodyHtml = doc.body.innerHTML;
     if (platform === "chatgpt") turns = extractChatGPTFromHTML(bodyHtml);
     else if (platform === "claude") turns = extractClaudeFromHTML(bodyHtml);
     else if (platform === "gemini") turns = extractGeminiFromHTML(bodyHtml);

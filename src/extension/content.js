@@ -42,7 +42,7 @@
     return text.replace(/\n{3,}/g, "\n\n").trim();
   }
 
-  // 3. Surface Extractor
+  // 3. Resilient Surface Extractor
   function extractConversation() {
     const platform = getPlatform();
     let title = document.title || "Active Session";
@@ -55,31 +55,113 @@
     const turns = [];
 
     if (platform === "chatgpt") {
-      const nodes = document.querySelectorAll("[data-message-author-role]");
-      nodes.forEach((el) => {
-        const role = el.getAttribute("data-message-author-role") === "user" ? "user" : "assistant";
-        const content = cleanText(el.innerHTML);
-        if (content) turns.push({ role, content });
-      });
+      // 1. Modern ChatGPT uses <article> elements for conversation turns
+      const articles = document.querySelectorAll("article, [data-testid^='conversation-turn']");
+      if (articles.length > 0) {
+        articles.forEach((art, idx) => {
+          let role = null;
+          const authorAttr =
+            art.querySelector("[data-message-author-role]")?.getAttribute("data-message-author-role") ||
+            art.getAttribute("data-message-author-role");
+
+          if (authorAttr === "user" || authorAttr === "assistant") {
+            role = authorAttr;
+          } else {
+            const textHeader = art.querySelector("h5, h6, .sr-only")?.textContent || "";
+            if (/you said/i.test(textHeader)) {
+              role = "user";
+            } else if (/chatgpt said|assistant said/i.test(textHeader)) {
+              role = "assistant";
+            } else if (art.querySelector(".markdown")) {
+              role = "assistant";
+            } else if (art.querySelector(".whitespace-pre-wrap")) {
+              role = "user";
+            } else {
+              role = idx % 2 === 0 ? "user" : "assistant";
+            }
+          }
+
+          const clone = art.cloneNode(true);
+          clone.querySelectorAll(".sr-only, h5, h6").forEach((el) => {
+            if (/said/i.test(el.textContent || "")) el.remove();
+          });
+
+          const targetContainer =
+            role === "assistant" && clone.querySelector(".markdown")
+              ? clone.querySelector(".markdown")
+              : role === "user" && clone.querySelector(".whitespace-pre-wrap")
+              ? clone.querySelector(".whitespace-pre-wrap")
+              : clone;
+
+          const content = cleanText(targetContainer.innerHTML);
+          if (content) turns.push({ role, content });
+        });
+      }
+
+      // 2. Direct attribute fallback
+      if (turns.length === 0) {
+        const nodes = document.querySelectorAll("[data-message-author-role]");
+        nodes.forEach((el) => {
+          const role = el.getAttribute("data-message-author-role") === "user" ? "user" : "assistant";
+          const content = cleanText(el.innerHTML);
+          if (content) turns.push({ role, content });
+        });
+      }
     } else if (platform === "claude") {
       const all = Array.from(
-        document.querySelectorAll('[data-testid="user-message"], .font-user-message, .font-claude-message')
+        document.querySelectorAll(
+          '[data-testid="user-message"], .font-user-message, .font-claude-message, [data-is-streaming], div.prose, [data-testid="chat-message"]'
+        )
       );
       all.sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
       all.forEach((el) => {
         const isUser = el.matches('[data-testid="user-message"], .font-user-message');
-        const content = cleanText(el.innerHTML);
-        if (content) turns.push({ role: isUser ? "user" : "assistant", content });
+        const isAssistant = el.matches('.font-claude-message, [data-is-streaming], div.prose');
+        const role = isUser ? "user" : isAssistant ? "assistant" : null;
+        if (role) {
+          const content = cleanText(el.innerHTML);
+          if (content) turns.push({ role, content });
+        }
       });
     } else if (platform === "gemini") {
-      const allTurns = document.querySelectorAll(
-        ".user-query-container, .model-response-text, user-query, model-response"
+      const allTurns = Array.from(
+        document.querySelectorAll(
+          ".user-query-container, .model-response-text, user-query, model-response, [data-test-id='user-query'], [data-test-id='model-response']"
+        )
       );
+      allTurns.sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
       allTurns.forEach((el) => {
         const isUser = el.className.includes("user-query") || el.tagName.toLowerCase() === "user-query";
         const content = cleanText(el.innerHTML);
         if (content) turns.push({ role: isUser ? "user" : "assistant", content });
       });
+    }
+
+    // 3. Universal Fallback: Parse visible speaker markers from body text
+    if (turns.length === 0 && document.body) {
+      const fullText = document.body.innerText || document.body.textContent || "";
+      const lines = fullText.split("\n");
+      let currentRole = null;
+      let currentLines = [];
+      const speakerRegex = /^(You said|ChatGPT said|User|Human|Claude|Assistant|Gemini):\s*(.*)$/i;
+
+      for (const line of lines) {
+        const match = line.trim().match(speakerRegex);
+        if (match) {
+          if (currentRole && currentLines.length > 0) {
+            turns.push({ role: currentRole, content: currentLines.join("\n").trim() });
+            currentLines = [];
+          }
+          const speaker = match[1].toLowerCase();
+          currentRole = speaker === "you said" || speaker === "user" || speaker === "human" ? "user" : "assistant";
+          if (match[2]) currentLines.push(match[2]);
+        } else if (currentRole) {
+          currentLines.push(line);
+        }
+      }
+      if (currentRole && currentLines.length > 0) {
+        turns.push({ role: currentRole, content: currentLines.join("\n").trim() });
+      }
     }
 
     return { platform, title, turns };

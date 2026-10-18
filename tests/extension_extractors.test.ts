@@ -94,4 +94,50 @@ describe("Milestone M11: Web Extension DOM Extractors", () => {
     expect(cleaned).toContain("console.log(\"hello\");");
     expect(cleaned).toContain("Second line");
   });
+
+  it("extracts turns from modern ChatGPT HTML using accessibility headings (sr-only)", () => {
+    const html = `
+      <article>
+        <h5 class="sr-only">You said:</h5>
+        <div class="whitespace-pre-wrap">Tell me what you get after running.</div>
+      </article>
+      <article>
+        <h5 class="sr-only">ChatGPT said:</h5>
+        <div class="markdown">
+          <p>🚀 What to do NOW:</p>
+          <p>1. Add debug prints</p>
+          <p>2. Fix semantic_service.py</p>
+        </div>
+      </article>
+    `;
+
+    const turns = extractChatGPTFromHTML(html);
+    expect(turns).toHaveLength(2);
+    expect(turns[0].role).toBe("user");
+    expect(turns[0].content).toContain("Tell me what you get");
+    expect(turns[1].role).toBe("assistant");
+    expect(turns[1].content).toContain("What to do NOW");
+  });
+
+  it("extracts turns from modern ChatGPT HTML using .markdown and .whitespace-pre-wrap without roles", () => {
+    const html = `
+      <article>
+        <div class="whitespace-pre-wrap">Can we optimize this query?</div>
+      </article>
+      <article>
+        <div class="markdown prose">
+          <p>Yes, use an index on the user_id column:</p>
+          <pre><code class="language-sql">CREATE INDEX idx_user ON logs(user_id);</code></pre>
+        </div>
+      </article>
+    `;
+
+    const turns = extractChatGPTFromHTML(html);
+    expect(turns).toHaveLength(2);
+    expect(turns[0].role).toBe("user");
+    expect(turns[0].content).toContain("Can we optimize this query");
+    expect(turns[1].role).toBe("assistant");
+    expect(turns[1].content).toContain("CREATE INDEX idx_user");
+  });
 });
+
