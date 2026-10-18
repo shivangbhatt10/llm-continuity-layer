@@ -126,3 +126,30 @@ This log records architectural decisions, rationale, deviations, and edge cases 
   - *Single frontier model*: Running map-reduce chunking on large transcripts through expensive models causes rate-limit exhaustion.
 - **Consequences**:
   - Secure, cost-optimized, and resilient LLM execution with 100% offline-verifiable testability.
+
+---
+
+## ADR-0007: Symbol-Aware Code Block Superseding (The 96-Block Rule) & Domain Classification
+
+- **Date**: 2026-10-18
+- **Status**: Accepted
+- **Context**:
+  Long technical chats frequently generate 50–100 code blocks (Gotcha #18). Naive deduplication mechanisms fail catastrophically:
+  1. Grouping by `language + first line` erroneously treats separate source modules that share `import requests` or `'use strict'` as identical files, discarding valid modules.
+  2. Replacing an older block with the latest block erases full 200-line implementations when the model generates a 5-line patch snippet later in the chat.
+  3. Fences can be nested (e.g., markdown snippets describing python code) and break with naive backtick splitting (Gotcha #6).
+  4. Scattered 1-line shell commands pollute the token budget.
+  5. Sessions require bounded domain classification with the invariant that `debugging` implies `coding` (Gotcha #19).
+- **Decision**:
+  1. Use backreference multiline regular expressions (`^(`{3,})([^\n]*)\n([\s\S]*?)^\1\s*$`) to capture arbitrary depth nested fences, and extract file labels from preceding markdown headings (`## 📄 path/file.py`).
+  2. Implement language-specific symbol extraction (`extractSymbols`) detecting `function`, `class`, `interface`, `type`, `def`, `fn`.
+  3. Enforce **The 96-Block Rule**: A newer block supersedes an older block ONLY if it defines every symbol the older block defined (or contains 100% of the older block's lines). Small patches never supersede full source files.
+  4. Automatically filter noise blocks (<150 chars of lone URLs, search terms, or raw sample JSON).
+  5. Consolidate scattered single-line shell commands into a single deduplicated shell script block.
+  6. Enforce that `debugging` automatically injects `coding` as a prerequisite domain, capped at a maximum of 2 primary domain labels, backed by a deterministic keyword heuristic fallback.
+- **Alternatives Rejected**:
+  - *Deduplicating by language + first line*: Catastrophically drops distinct source files that share common imports.
+  - *Pure recency overwrites*: Erases working modules when an assistant provides a targeted diff or patch snippet.
+- **Consequences**:
+  - 100% verbatim preservation of active codebase state with zero code corruption.
+
