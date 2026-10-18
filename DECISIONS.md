@@ -283,3 +283,28 @@ This log records architectural decisions, rationale, deviations, and edge cases 
   - *Putting API keys directly inside the browser extension*: Severe security vulnerability that exposes keys in extension bundle memory.
 - **Consequences**:
   - Secure, lightweight local bridge connecting browser UIs and IDEs directly to the continuity engine.
+
+---
+
+## ADR-0013: Manifest V3 Web Extension for 1-Click Cross-Provider Handoff
+
+- **Date**: 2026-10-18
+- **Status**: Accepted
+- **Context**:
+  Manually exporting JSON archives or copy-pasting markdown transcripts when an AI provider hits rate limits or amnesia introduces high cognitive friction.
+  We require a browser-native extension that:
+  1. Operates on `chatgpt.com`, `claude.ai`, and `gemini.google.com` seamlessly without breaking existing page scripts.
+  2. Extracts multi-turn roles, text, and nested code blocks into clean markdown without losing language tags.
+  3. Presents an unobtrusive, floating control widget matching modern glassmorphic dark-mode design standards.
+  4. Dispatches turns to the local continuity daemon (`http://127.0.0.1:4141/api/handoff`), saves the capsule to SQLite, copies the handoff envelope with the 3-Line Handshake to the system clipboard, and opens the target AI tab.
+- **Decision**:
+  1. Author Manifest V3 extension configuration (`src/extension/manifest.json`) specifying declarative host permissions for `chatgpt.com`, `claude.ai`, `gemini.google.com`, and `http://127.0.0.1:4141/*`.
+  2. Implement `extractors.ts` with surface-specific attribute selectors (`[data-message-author-role]`, `.font-claude-message`, `.user-query-container`) and regex HTML fallback.
+  3. Implement `content.js` with interactive floating HUD widget and `navigator.clipboard.writeText` integration.
+  4. Implement `background.js` service worker handling `open_target_tab` requests via `chrome.tabs.create`.
+  5. Provide `EXTENSION_GUIDE.md` detailing step-by-step developer loading via `chrome://extensions` in Developer Mode.
+- **Alternatives Rejected**:
+  - *Puppeteer-only scraping*: Requires external Node processes and cannot interact with active browser tabs where the user is already authenticated.
+  - *Direct LLM calls from extension*: Exposes Gemini API keys in client-side extension storage.
+- **Consequences**:
+  - Instantaneous, zero-friction 1-click cross-provider handoff directly inside the browser.

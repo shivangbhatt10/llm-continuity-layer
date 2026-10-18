@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "LLM Continuity & Memory Layer Handoff",
+  "version": "1.0.0",
+  "description": "1-click cross-provider session continuity and handoff between ChatGPT, Claude, and Gemini.",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "clipboardWrite"
+  ],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*",
+    "https://claude.ai/*",
+    "https://gemini.google.com/*",
+    "http://127.0.0.1:4141/*",
+    "http://localhost:4141/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*",
+        "https://claude.ai/*",
+        "https://gemini.google.com/*"
+      ],
+      "js": ["content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "LLM Continuity Layer"
+  }
+}
