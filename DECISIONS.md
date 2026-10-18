@@ -233,6 +233,26 @@ This log records architectural decisions, rationale, deviations, and edge cases 
 - **Consequences**:
   - Fast, portable, and offline-testable developer CLI with clean resource lifecycle management.
 
+---
 
+## ADR-0011: Golden Evaluation Harness & Gotchas #1–#19 Verification Gate
 
-
+- **Date**: 2026-10-18
+- **Status**: Accepted
+- **Context**:
+  To conclude Phase 1 of the Cross-Provider Continuity Layer, we must systematically prove that all 19 real-world transcript gotchas, domain contracts, and continuity invariants hold against complex real-world chat transcripts.
+  We require:
+  1. A realistic golden test case (`eval/cases/sample_debugging`) featuring scraped markdown headers, PUA Unicode noise (`\ue200entity\ue202`), leaked citations (`fileL8-L28`), dead ends that must not be repeated, and code blocks that evolve.
+  2. An automated scoring engine (`eval/run_eval.ts`) capable of evaluating domain classification, required sections, negative space / ruled-out retention, verbatim artifact symbol fidelity, and 3-line handshake directive enforcement.
+  3. Support for both deterministic offline dry-runs (`--dry-run`) in CI/test suites and live Gemini API execution (`--live`).
+- **Decision**:
+  1. Author `eval/cases/sample_debugging/conversation.md` containing 6 realistic turns of a Redis distributed locking incident with multiple failure hypotheses.
+  2. Author `eval/cases/sample_debugging/case.json` asserting contract criteria: domain types (`debugging`, `coding`), required sections (`Symptom and Exact Error`, `Ruled Out (with why)`, `Stack and Environment`, `Files and Components`), ruled-out dead ends (`10000ms`), and required code symbols (`DriftCompensatedMutex`, `performance.now()`).
+  3. Implement `eval/run_eval.ts` with multi-category scoring (classification, sections, ruled-out, artifacts, handshake) producing a granular 100-point score report.
+  4. Implement `tests/eval.test.ts` to ensure the golden benchmark runs as part of the standard `vitest` suite.
+  5. Validate against the live Gemini 3.8 Flash model (`--live`), achieving a 100% score on dead-end retention, symbol preservation, and 3-line handshake injection.
+- **Alternatives Rejected**:
+  - *Subjective manual testing*: Fails to catch subtle regressions like dropped dead ends or corrupted code symbols across model upgrades.
+  - *Strict character-by-character diffs on LLM prose*: Brittle against non-deterministic model phrasing; semantic assertion of required sections and keywords is far more robust.
+- **Consequences**:
+  - Continuous, automated verification that the continuity layer faithfully transmits state across frontier LLMs without amnesia or drift.

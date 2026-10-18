@@ -1,0 +1,15 @@
+{
+  "id": "sample_debugging",
+  "title": "Concurrency Deadlock in Redis Mutex",
+  "expected_types": ["coding", "debugging"],
+  "required_sections": [
+    "Goal",
+    "Symptom and Exact Error",
+    "Ruled Out (with why)",
+    "Current State",
+    "Next Step"
+  ],
+  "ruled_out_terms": ["timeout", "increasing lock timeout"],
+  "required_symbols": ["DriftCompensatedMutex", "acquire"],
+  "expected_next_step_terms": ["clock drift", "test"]
+}
