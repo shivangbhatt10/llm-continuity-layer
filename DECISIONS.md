@@ -60,4 +60,28 @@ This log records architectural decisions, rationale, deviations, and edge cases 
 - **Consequences**:
   - Clean `Conversation[]` AST ready for multi-domain classification and token compaction.
 
+---
+
+## ADR-0004: Fence-Bounded Unicode/Citation Sanitization & Scraped Markdown Ingestion
+
+- **Date**: 2026-10-18
+- **Status**: Accepted
+- **Context**:
+  Puppeteer-scraped Markdown and browser extension captures often leak ChatGPT Private-Use Unicode characters (`U+E000`–`U+F8FF`), entity envelopes (`\ue200entity\ue202[...]`), cite tags (`\ue200cite...`), and DOM source citations (`fileL8-L28`) (Gotchas #14, #17). Furthermore, markdown code snippets may contain lines resembling turn headers (e.g. `## Turn 2: 👤 User`) or valid code variables matching citation patterns (`fileL8 = 100`) (Gotcha #5).
+- **Decision**:
+  1. Implement a fence-aware line scanner in `unicode_scrubber.ts` that tracks entry and exit of code fences (` ``` ` and ` ~~~ `).
+  2. Outside code fences only:
+     - Replace entity wrappers with the entity's human-readable display name (the 2nd element of the array).
+     - Strip cite tags and stray PUA Unicode characters.
+     - Strip leaked `fileL8-L28` citations and record the count in metadata.
+  3. Inside code fences: Preserve all characters and lines 100% verbatim.
+  4. In `scraped_md.ts`, split turns on `## Turn \d+:` strictly outside code fences, trim one trailing `---` turn separator, parse attachment markers into `meta.attachments`, and flag discrepancies between parsed turn count and `Total Turns` header.
+  5. In `index.ts`, implement content-based detection (`detectFormat`) that safely ignores non-chat files like `README.md`.
+- **Alternatives Rejected**:
+  - *Global regex replacement*: Rejected because it strips code variables and breaks code syntax.
+  - *Extension-based format detection (`.md`)*: Rejected because scanning directories containing documentation (`README.md`, `CONTRIBUTING.md`) would attempt to parse non-conversational files.
+- **Consequences**:
+  - Deterministic ingestion of scraped markdown with complete fence isolation and metadata verification.
+
+
 
