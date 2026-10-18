@@ -256,3 +256,30 @@ This log records architectural decisions, rationale, deviations, and edge cases 
   - *Strict character-by-character diffs on LLM prose*: Brittle against non-deterministic model phrasing; semantic assertion of required sections and keywords is far more robust.
 - **Consequences**:
   - Continuous, automated verification that the continuity layer faithfully transmits state across frontier LLMs without amnesia or drift.
+
+---
+
+## ADR-0012: Local Continuity Daemon & HTTP Proxy (`http://127.0.0.1:4141`)
+
+- **Date**: 2026-10-18
+- **Status**: Accepted
+- **Context**:
+  To bridge the browser extension (Phase 2 Track 1) and external AI developer harnesses/IDEs like Cursor or Continue.dev (Phase 2 Track 2), we require a local background daemon.
+  Specific design constraints:
+  1. Manifest V3 Chrome extensions cannot execute native Node.js libraries, manipulate local SQLite files, or hold API secret keys. They require a local bridge (`POST /api/handoff`).
+  2. Browser security models enforce CORS preflight (`OPTIONS` requests) on cross-origin `fetch` calls originating from `chrome-extension://*`.
+  3. External tools require standard OpenAI-compatible `/v1/chat/completions` and Anthropic `/v1/messages` endpoints.
+  4. Network and quota volatility require automatic failover on HTTP `429` (Rate Limit) errors across providers.
+  5. Test environments require clean socket teardowns to avoid process hangs or port exhaustion.
+- **Decision**:
+  1. Implement a zero-dependency HTTP server in `src/proxy/server.ts` utilizing Node native `node:http`.
+  2. Implement permissive CORS headers handling preflight `OPTIONS` with `204 No Content` and allowing extension origins.
+  3. Implement `POST /api/handoff` to ingest live browser messages, synthesize a state capsule with `gemini-3.8-flash` (or offline `ScriptedLLM`), store it in `SQLiteStore`, and format target envelopes with the mandatory 3-Line Handshake.
+  4. Implement `executeWithFailover` in `src/proxy/failover.ts` detecting HTTP 429/503 rate limit errors and cascading execution to fallback providers.
+  5. Track active sockets in `activeSockets` Set and destroy connections during `close()`, guaranteeing clean termination in test harnesses.
+  6. Wire `ml serve [--port 4141]` into `src/cli.ts` with graceful `SIGINT`/`SIGTERM` handling.
+- **Alternatives Rejected**:
+  - *Express or Fastify dependency*: Bloats the codebase with dozens of external transitive dependencies for a focused local proxy. Native `node:http` provides maximum speed and zero dependency risk.
+  - *Putting API keys directly inside the browser extension*: Severe security vulnerability that exposes keys in extension bundle memory.
+- **Consequences**:
+  - Secure, lightweight local bridge connecting browser UIs and IDEs directly to the continuity engine.

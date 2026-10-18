@@ -91,4 +91,11 @@ CREATE TABLE events (
     expect(res.stdout).toContain("gemini-3.1-flash-lite");
     expect(res.stdout).toContain("gemini-3.8-flash");
   });
+
+  it("ml --help displays usage including ml serve command", async () => {
+    const res = await runCLI(["--help"]);
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("ml serve [options]");
+    expect(res.stdout).toContain("--port <number>");
+  });
 });

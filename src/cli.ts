@@ -8,6 +8,7 @@ import { DryRunLLM, GeminiClient } from "./core/llm.js";
 import { synthesizeCapsule } from "./core/capsule.js";
 import { SQLiteStore } from "./store/db.js";
 import { formatCapsule, type TargetProvider } from "./deliver/formatters/index.js";
+import { createContinuityServer } from "./proxy/server.js";
 
 export interface CLIResult {
   stdout: string;
@@ -33,7 +34,12 @@ Usage:
   ml list <path>                           List conversations in file or folder
   ml capsule <path> [options]              Synthesize a State Capsule
   ml show <id> [options]                   Inspect a saved capsule in SQLite store
+  ml serve [options]                       Start Continuity Daemon & Proxy server
   ml models                                List supported Gemini frontier models
+
+Options for 'serve':
+  --port <number>                          HTTP port to listen on (default: 4141)
+  --db <path>                              SQLite database path (default: continuity.db)
 
 Options for 'capsule':
   --target <claude|gemini|markdown>        Target delivery format (default: gemini)
@@ -164,6 +170,39 @@ Options for 'capsule':
           log(`--- ${sec} ---`);
           log(text);
           log("");
+        }
+        break;
+      }
+
+      case "serve": {
+        const portArg = args.indexOf("--port");
+        const port = portArg !== -1 && args[portArg + 1] ? parseInt(args[portArg + 1], 10) : 4141;
+        const dbArg = args.indexOf("--db");
+        const dbPath = dbArg !== -1 && args[dbArg + 1] ? args[dbArg + 1] : "continuity.db";
+
+        const serverInstance = await createContinuityServer({ port, dbPath });
+        const boundPort = await serverInstance.listen(port);
+        log(`Continuity Daemon & HTTP Proxy running on http://127.0.0.1:${boundPort}`);
+        log(`Working Memory Store: ${dbPath}`);
+        log(`Endpoints:`);
+        log(`  POST http://127.0.0.1:${boundPort}/api/handoff         (Browser Extension 1-Click Handoff)`);
+        log(`  GET  http://127.0.0.1:${boundPort}/api/health          (Daemon Health Check)`);
+        log(`  POST http://127.0.0.1:${boundPort}/v1/chat/completions (OpenAI Compatible Proxy)`);
+        log(`  POST http://127.0.0.1:${boundPort}/v1/messages         (Anthropic Compatible Proxy)`);
+
+        // If invoked from direct CLI, keep process alive until SIGINT
+        if (isMain) {
+          await new Promise<void>((resolve) => {
+            process.on("SIGINT", async () => {
+              log("\nGracefully shutting down Continuity Daemon...");
+              await serverInstance.close();
+              resolve();
+            });
+            process.on("SIGTERM", async () => {
+              await serverInstance.close();
+              resolve();
+            });
+          });
         }
         break;
       }
