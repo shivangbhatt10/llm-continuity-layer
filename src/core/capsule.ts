@@ -1,5 +1,5 @@
 import type { Capsule, Conversation, LLMClient, Message } from "./schema.js";
-import { classifyConversation } from "./classify.js";
+import { classifyConversation, heuristicClassify } from "./classify.js";
 import { getTemplateSections } from "./templates/index.js";
 import { extractArtifacts, deduplicateArtifacts } from "./artifacts.js";
 import { summarizeTranscript } from "./chunk_summarize.js";
@@ -10,6 +10,11 @@ export const NOT_ESTABLISHED = "Not established in the conversation.";
 export interface ParsedSections {
   sections: Record<string, string>;
   missingSections: string[];
+}
+
+export interface SynthesizeCapsuleOptions {
+  fastMode?: boolean;
+  customNextStep?: string;
 }
 
 /**
@@ -87,6 +92,7 @@ export function parseCapsuleSections(
 /**
  * Selects recent turns under budget, truncating oversized messages (Gotcha #10).
  * Always preserves at least the last 2 turns.
+ * Replaces large code blocks (>6 lines) with verbatim artifact references to save budget.
  */
 export function selectRecentTurns(
   messages: Message[],
@@ -101,6 +107,15 @@ export function selectRecentTurns(
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     let content = msg.content;
+
+    // Replace huge code blocks (> 6 lines) in recent turns with artifact reference
+    content = content.replace(/```([a-zA-Z0-9#+_-]*)\n([\s\S]*?)```/g, (match, lang, code) => {
+      const lineCount = code.split("\n").length;
+      if (lineCount > 6) {
+        return `\`\`\`${lang || "text"}\n[See verbatim code in Artifacts section above]\n\`\`\``;
+      }
+      return match;
+    });
 
     // Truncate individual oversized turns 40% head / 60% tail
     if (content.length > maxTurnChars) {
@@ -135,10 +150,15 @@ export function selectRecentTurns(
  */
 export async function synthesizeCapsule(
   conversation: Conversation,
-  llm: LLMClient
+  llm: LLMClient,
+  options?: SynthesizeCapsuleOptions
 ): Promise<Capsule> {
-  // 1. Multi-label domain classification (Gotcha #19)
-  const types = await classifyConversation(conversation, llm);
+  // 1. Multi-label domain classification (0ms heuristic fastMode or LLM classify)
+  const fullRawText = conversation.messages.map((m) => m.content).join("\n");
+  const types =
+    options?.fastMode !== false
+      ? heuristicClassify(fullRawText)
+      : await classifyConversation(conversation, llm);
 
   // 2. Resolve domain template sections (Section 3.2)
   const requestedSections = getTemplateSections(types);
@@ -147,30 +167,83 @@ export async function synthesizeCapsule(
   const rawArtifacts = extractArtifacts(conversation.messages);
   const artifacts = deduplicateArtifacts(rawArtifacts);
 
-  // 4. Summarize transcript (direct vs notes mode, Gotcha #11)
-  const summaryResult = await summarizeTranscript(conversation.messages, llm);
+  // 4. Sanitize messages for summarizer:
+  // a. Replace code blocks > 4 lines with compact token placeholders
+  // b. Trick #5: Highlight user constraints and pivots
+  const summarizerMessages: Message[] = conversation.messages.map((m) => {
+    let content = m.content;
 
-  // 5. Synthesize sections via Strong Model
+    // Replace fenced code blocks (> 4 lines) with artifact tag
+    content = content.replace(/```([a-zA-Z0-9#+_-]*)\n([\s\S]*?)```/g, (match, lang, code) => {
+      const lineCount = code.split("\n").length;
+      if (lineCount > 4) {
+        return `[Code Artifact Extracted: ${lang || "code"}]`;
+      }
+      return match;
+    });
+
+    // Trick #5: User Pivot Highlighter
+    if (
+      m.role === "user" &&
+      /\b(no|wait|actually|instead|don't|do not|wrong|failed|error|broken|revert)\b/i.test(m.content)
+    ) {
+      content = `[⚠️ USER CONSTRAINT / PIVOT]: ${content}`;
+    }
+
+    return {
+      ...m,
+      content,
+    };
+  });
+
+  // 5. Summarize transcript (with fast 100k char single-pass headroom)
+  const summaryResult = await summarizeTranscript(summarizerMessages, llm, {
+    thresholdChars: 100000,
+    chunkTargetChars: 30000,
+  });
+
+  // 6. Trick #6: Scan verbatim error lines to pin in the synthesis prompt
+  const errorMatches = new Set<string>();
+  const errorRegex = /(?:Error|Exception|Traceback|FAILED|panic|ERR!|Cannot read properties)[^\n]{0,200}/g;
+  for (const m of conversation.messages) {
+    let match: RegExpExecArray | null;
+    while ((match = errorRegex.exec(m.content)) !== null) {
+      const errStr = match[0].trim();
+      if (errStr.length > 5) {
+        errorMatches.add(errStr);
+      }
+    }
+  }
+
+  // 7. Synthesize sections via Strong Model
   const systemPrompt = buildCapsuleSystemPrompt(requestedSections);
-  const userPrompt = `Synthesize the state capsule from the following transcript content:\n\n${summaryResult.text}`;
+  let userPrompt = `Synthesize the state capsule from the following transcript content:\n\n${summaryResult.text}`;
+  if (errorMatches.size > 0) {
+    const errorList = Array.from(errorMatches).map((e) => `- ${e}`).join("\n");
+    userPrompt += `\n\nDETECTED VERBATIM ERRORS (MUST be retained in Symptom or Ruled Out if relevant):\n${errorList}`;
+  }
 
   const rawCapsuleMarkdown = await llm.complete(systemPrompt, userPrompt, {
     task: "capsule",
   });
 
-  // 6. Tolerant section parsing (Gotcha #8)
+  // 8. Tolerant section parsing (Gotcha #8)
   const { sections, missingSections } = parseCapsuleSections(
     rawCapsuleMarkdown,
     requestedSections
   );
 
-  // 7. Extract next step
-  const nextStep =
+  // 9. Extract next step (with optional customNextStep instruction)
+  let nextStep =
     sections["Next Step"] && sections["Next Step"] !== NOT_ESTABLISHED
       ? sections["Next Step"]
       : "Continue task execution based on the current state.";
 
-  // 8. Select recent turns budget (Gotcha #10)
+  if (options?.customNextStep?.trim()) {
+    nextStep = `${nextStep}\n\nUser Instruction: ${options.customNextStep.trim()}`;
+  }
+
+  // 10. Select recent turns budget (Gotcha #10)
   const recentTurns = selectRecentTurns(conversation.messages);
 
   return {
@@ -189,6 +262,8 @@ export async function synthesizeCapsule(
       missing_sections: missingSections,
       raw_artifact_count: rawArtifacts.length,
       deduped_artifact_count: artifacts.length,
+      fast_mode: options?.fastMode !== false,
+      pinned_errors_count: errorMatches.size,
     },
   };
 }

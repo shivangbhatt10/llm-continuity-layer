@@ -205,18 +205,13 @@ export async function summarizeTranscript(
     return { mode: "direct", text: fullText };
   }
 
-  // Notes mode: chunk -> summarize each chunk -> merge notes
+  // Notes mode: chunk -> summarize each chunk in parallel -> merge notes
   const chunks = chunkConversation(messages, chunkTarget);
-  const chunkNotes: string[] = [];
-
-  for (const chunk of chunks) {
-    const note = await llm.complete(
-      buildChunkNotesPrompt(),
-      chunk.text,
-      { task: "chunk_summary" }
-    );
-    chunkNotes.push(note);
-  }
+  const chunkNotes: string[] = await Promise.all(
+    chunks.map((chunk) =>
+      llm.complete(buildChunkNotesPrompt(), chunk.text, { task: "chunk_summary" })
+    )
+  );
 
   const mergedNotes = await mergeChunkNotes(chunkNotes, llm, chunkTarget);
   return { mode: "notes", text: mergedNotes };

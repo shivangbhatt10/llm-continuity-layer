@@ -5,7 +5,7 @@ describe("Configuration & Model Precedence (Gotcha #12 & Gotcha #13)", () => {
   it("uses default models when no environment variables are set", () => {
     const config: Config = loadConfig({});
     expect(config.cheapModel).toBe("gemini-3.1-flash-lite");
-    expect(config.strongModel).toBe("gemini-3.8-flash");
+    expect(config.strongModel).toBe("gemini-3.1-flash-lite");
     expect(config.apiKey).toBeUndefined();
   });
 

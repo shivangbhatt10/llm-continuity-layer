@@ -95,6 +95,16 @@ describe("Milestone M11: Web Extension DOM Extractors", () => {
     expect(cleaned).toContain("Second line");
   });
 
+  it("strips buttons, sr-only elements, and copy header bars inside pre/code blocks", () => {
+    const raw = `
+      <pre><button class="copy-btn">Copy code</button><code class="language-python"><span class="sr-only">Copy code</span>print("clean_code")</code></pre>
+    `;
+    const cleaned = cleanTurnContent(raw);
+    expect(cleaned).toContain("print(\"clean_code\")");
+    expect(cleaned).not.toContain("Copy code");
+    expect(cleaned).not.toContain("copy-btn");
+  });
+
   it("extracts turns from modern ChatGPT HTML using accessibility headings (sr-only)", () => {
     const html = `
       <article>

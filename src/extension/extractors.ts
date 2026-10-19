@@ -46,12 +46,21 @@ function decodeEntities(encoded: string): string {
 export function cleanTurnContent(html: string): string {
   let text = html;
 
+  // Strip buttons, sr-only elements, and copy code bars
+  text = text.replace(/<button[\s\S]*?<\/button>/gi, "");
+  text = text.replace(/<(?:div|span|h[1-6])[^>]*class="[^"]*sr-only[^"]*"[\s\S]*?<\/(?:div|span|h[1-6])>/gi, "");
+  text = text.replace(/(?:Copy code|Copy|Copied!)/gi, "");
+
   // Replace <pre><code class="language-xyz">...</code></pre> with fenced code
   text = text.replace(
     /<pre[^>]*><code(?: class="[^"]*language-([a-zA-Z0-9#+_-]+)[^"]*")?[^>]*>([\s\S]*?)<\/code><\/pre>/gi,
     (_, lang, code) => {
       const languageTag = lang || "";
-      const decodedCode = decodeEntities(code.replace(/<[^>]+>/g, "").trim());
+      const cleanCode = code
+        .replace(/<button[\s\S]*?<\/button>/gi, "")
+        .replace(/<[^>]+>/g, "")
+        .trim();
+      const decodedCode = decodeEntities(cleanCode);
       return `\n\`\`\`${languageTag}\n${decodedCode}\n\`\`\`\n`;
     }
   );

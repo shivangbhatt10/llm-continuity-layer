@@ -1,9 +1,12 @@
-// Cross-Provider LLM Continuity Layer Content Script
+// Cross-Provider LLM Continuity Layer Content Script (M12 God-Speed Engine)
 
 (function () {
+  // 1. Check for Pending Handoff Auto-Fill on Page Load
+  checkPendingHandoffAutoFill();
+
   if (document.getElementById("llm-continuity-container")) return;
 
-  // 1. Platform Detection
+  // 2. Platform Detection
   function getPlatform() {
     const host = window.location.hostname.toLowerCase();
     if (host.includes("chatgpt.com") || host.includes("openai.com")) return "chatgpt";
@@ -12,14 +15,22 @@
     return "unknown";
   }
 
-  // 2. HTML to Clean Text with Fenced Code Blocks
+  // 3. HTML to Clean Text with Fenced Code Blocks
   function cleanText(html) {
     let text = html;
+
+    // Strip buttons, sr-only elements, and copy header bars before extracting
+    text = text.replace(/<button[\s\S]*?<\/button>/gi, "");
+    text = text.replace(/<(?:div|span|h[1-6])[^>]*class="[^"]*sr-only[^"]*"[\s\S]*?<\/(?:div|span|h[1-6])>/gi, "");
+    text = text.replace(/(?:Copy code|Copy|Copied!)/gi, "");
+
+    // Convert code blocks
     text = text.replace(
       /<pre[^>]*><code(?: class="[^"]*language-([a-zA-Z0-9#+_-]+)[^"]*")?[^>]*>([\s\S]*?)<\/code><\/pre>/gi,
       (_, lang, code) => {
         const langTag = lang || "";
         const cleanCode = code
+          .replace(/<button[\s\S]*?<\/button>/gi, "")
           .replace(/<[^>]+>/g, "")
           .replace(/&lt;/g, "<")
           .replace(/&gt;/g, ">")
@@ -42,9 +53,152 @@
     return text.replace(/\n{3,}/g, "\n\n").trim();
   }
 
-  // 3. Resilient Surface Extractor
-  function extractConversation() {
+  // 4. Internal API Extraction (<200ms) for ChatGPT
+  async function tryExtractChatGPTApi() {
+    const match = window.location.pathname.match(/\/c\/([a-zA-Z0-9-]+)/);
+    if (!match) return null;
+    const conversationId = match[1];
+
+    try {
+      const sessionRes = await fetch("/api/auth/session", { credentials: "same-origin" });
+      if (!sessionRes.ok) return null;
+      const session = await sessionRes.json();
+      const token = session.accessToken;
+      if (!token) return null;
+
+      const convRes = await fetch(`/backend-api/conversation/${conversationId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        credentials: "same-origin",
+      });
+      if (!convRes.ok) return null;
+      const convData = await convRes.json();
+      if (!convData.mapping || !convData.current_node) return null;
+
+      const mapping = convData.mapping;
+      const pathNodes = [];
+      let curr = convData.current_node;
+      while (curr && mapping[curr]) {
+        pathNodes.push(mapping[curr]);
+        curr = mapping[curr].parent;
+      }
+      pathNodes.reverse();
+
+      const turns = [];
+      for (const node of pathNodes) {
+        const msg = node.message;
+        if (!msg || !msg.author) continue;
+        if (msg.metadata?.is_visually_hidden_from_conversation === true) continue;
+        if (msg.recipient && msg.recipient !== "all") continue;
+
+        const role = msg.author.role;
+        if (role !== "user" && role !== "assistant") continue;
+
+        let text = "";
+        if (msg.content?.parts) {
+          text = msg.content.parts
+            .filter((p) => typeof p === "string")
+            .join("\n")
+            .trim();
+        } else if (typeof msg.content?.text === "string") {
+          text = msg.content.text.trim();
+        }
+
+        if (!text) continue;
+
+        // Merge consecutive assistant turns
+        if (role === "assistant" && turns.length > 0 && turns[turns.length - 1].role === "assistant") {
+          turns[turns.length - 1].content += "\n\n" + text;
+        } else {
+          turns.push({ role, content: text });
+        }
+      }
+
+      if (turns.length > 0) {
+        return {
+          platform: "chatgpt",
+          title: convData.title || document.title || "Active ChatGPT Session",
+          turns,
+          extractedVia: "api",
+        };
+      }
+    } catch (err) {
+      console.warn("[Continuity] ChatGPT direct API extraction failed, using DOM fallback:", err);
+    }
+    return null;
+  }
+
+  // 5. Internal API Extraction (<200ms) for Claude
+  async function tryExtractClaudeApi() {
+    const match = window.location.pathname.match(/\/chat\/([a-zA-Z0-9-]+)/);
+    if (!match) return null;
+    const convUuid = match[1];
+
+    try {
+      const orgsRes = await fetch("/api/organizations", { credentials: "same-origin" });
+      if (!orgsRes.ok) return null;
+      const orgs = await orgsRes.json();
+      const orgId = orgs[0]?.uuid;
+      if (!orgId) return null;
+
+      const convRes = await fetch(
+        `/api/organizations/${orgId}/chat_conversations/${convUuid}?tree=True&rendering_mode=messages`,
+        { credentials: "same-origin" }
+      );
+      if (!convRes.ok) return null;
+      const convData = await convRes.json();
+      const messages = convData.chat_messages;
+      if (!Array.isArray(messages) || messages.length === 0) return null;
+
+      const turns = [];
+      for (const msg of messages) {
+        const role = msg.sender === "human" ? "user" : "assistant";
+        let text = "";
+        if (msg.text) {
+          text = msg.text.trim();
+        } else if (Array.isArray(msg.content)) {
+          text = msg.content
+            .map((c) => (c.type === "text" ? c.text : c.type === "tool_result" ? c.content : ""))
+            .join("\n")
+            .trim();
+        }
+
+        if (!text) continue;
+
+        if (role === "assistant" && turns.length > 0 && turns[turns.length - 1].role === "assistant") {
+          turns[turns.length - 1].content += "\n\n" + text;
+        } else {
+          turns.push({ role, content: text });
+        }
+      }
+
+      if (turns.length > 0) {
+        return {
+          platform: "claude",
+          title: convData.name || document.title || "Active Claude Session",
+          turns,
+          extractedVia: "api",
+        };
+      }
+    } catch (err) {
+      console.warn("[Continuity] Claude direct API extraction failed, using DOM fallback:", err);
+    }
+    return null;
+  }
+
+  // 6. Resilient Surface Extractor (API + DOM Multi-Tier)
+  async function extractConversation() {
     const platform = getPlatform();
+
+    // Fast-path: Direct Internal API
+    if (platform === "chatgpt") {
+      const apiResult = await tryExtractChatGPTApi();
+      if (apiResult && apiResult.turns.length > 0) return apiResult;
+    } else if (platform === "claude") {
+      const apiResult = await tryExtractClaudeApi();
+      if (apiResult && apiResult.turns.length > 0) return apiResult;
+    }
+
+    // Clean DOM Fallback
     let title = document.title || "Active Session";
     title = title
       .replace(/\s*-\s*ChatGPT$/i, "")
@@ -55,7 +209,6 @@
     const turns = [];
 
     if (platform === "chatgpt") {
-      // 1. Modern ChatGPT uses <article> elements for conversation turns
       const articles = document.querySelectorAll("article, [data-testid^='conversation-turn']");
       if (articles.length > 0) {
         articles.forEach((art, idx) => {
@@ -98,7 +251,6 @@
         });
       }
 
-      // 2. Direct attribute fallback
       if (turns.length === 0) {
         const nodes = document.querySelectorAll("[data-message-author-role]");
         nodes.forEach((el) => {
@@ -108,12 +260,15 @@
         });
       }
     } else if (platform === "claude") {
-      const all = Array.from(
+      const rawAll = Array.from(
         document.querySelectorAll(
           '[data-testid="user-message"], .font-user-message, .font-claude-message, [data-is-streaming], div.prose, [data-testid="chat-message"]'
         )
       );
+      // Filter out nested duplicates
+      const all = rawAll.filter((el) => !rawAll.some((other) => other !== el && other.contains(el)));
       all.sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+
       all.forEach((el) => {
         const isUser = el.matches('[data-testid="user-message"], .font-user-message');
         const isAssistant = el.matches('.font-claude-message, [data-is-streaming], div.prose');
@@ -137,7 +292,7 @@
       });
     }
 
-    // 3. Universal Fallback: Parse visible speaker markers from body text
+    // Universal Fallback: Parse visible speaker markers from body text
     if (turns.length === 0 && document.body) {
       const fullText = document.body.innerText || document.body.textContent || "";
       const lines = fullText.split("\n");
@@ -164,10 +319,10 @@
       }
     }
 
-    return { platform, title, turns };
+    return { platform, title, turns, extractedVia: "dom" };
   }
 
-  // 4. Inject Floating Widget HUD
+  // 7. Inject Floating Widget HUD
   const container = document.createElement("div");
   container.id = "llm-continuity-container";
 
@@ -195,12 +350,18 @@
         <div class="llm-target-options">
           <button class="llm-target-btn active" data-target="claude">Claude</button>
           <button class="llm-target-btn" data-target="gemini">Gemini</button>
+          <button class="llm-target-btn" data-target="chatgpt">ChatGPT</button>
         </div>
+      </div>
+
+      <div class="llm-field-group">
+        <label class="llm-field-label">Custom Next Step (Optional)</label>
+        <input type="text" class="llm-input-note" id="llm-note-input" placeholder="e.g. Focus on fixing test X first..." />
       </div>
 
       <button class="llm-action-btn" id="llm-handoff-btn">
         <span>🚀</span>
-        <span>Handoff & Copy State</span>
+        <span>Handoff & Open Tab</span>
       </button>
 
       <div class="llm-status-text" id="llm-status">Ready for 1-click handoff</div>
@@ -209,19 +370,57 @@
 
   document.body.appendChild(container);
 
-  // 5. Interactive UI Bindings
+  // 8. Interactive UI & Speculative Pre-Warming
   const pill = document.getElementById("llm-pill");
   const card = document.getElementById("llm-card");
   const closeBtn = document.getElementById("llm-close");
   const handoffBtn = document.getElementById("llm-handoff-btn");
   const statusEl = document.getElementById("llm-status");
+  const noteInput = document.getElementById("llm-note-input");
   const targetBtns = document.querySelectorAll(".llm-target-btn");
 
   let selectedTarget = "claude";
+  let prewarmedPromise = null;
+  let prewarmedTarget = null;
+  let cachedSession = null;
 
-  pill.addEventListener("click", () => {
+  // Speculative Pre-Warming on Pill Click
+  pill.addEventListener("click", async () => {
     pill.style.display = "none";
     card.classList.add("open");
+
+    try {
+      const startTime = performance.now();
+      statusEl.className = "llm-status-text";
+      statusEl.textContent = "Extracting session turns...";
+
+      cachedSession = await extractConversation();
+      const elapsed = Math.round(performance.now() - startTime);
+
+      if (cachedSession && cachedSession.turns.length > 0) {
+        statusEl.textContent = `⚡ Extracted ${cachedSession.turns.length} turns in ${elapsed}ms (${cachedSession.extractedVia === "api" ? "Direct API" : "DOM"})`;
+        prewarmedTarget = selectedTarget;
+
+        // Warm server SHA-256 cache in the background
+        prewarmedPromise = fetch("http://127.0.0.1:4141/api/handoff", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: cachedSession.title,
+            source: cachedSession.platform,
+            target: selectedTarget,
+            messages: cachedSession.turns,
+            nextStepNote: noteInput ? noteInput.value : undefined,
+          }),
+        })
+          .then((res) => (res.ok ? res.json() : null))
+          .catch(() => null);
+      } else {
+        statusEl.textContent = "Ready for 1-click handoff";
+      }
+    } catch (err) {
+      statusEl.textContent = "Ready for 1-click handoff";
+    }
   });
 
   closeBtn.addEventListener("click", () => {
@@ -237,13 +436,13 @@
     });
   });
 
+  // Handoff Execution (<50ms when pre-warmed)
   handoffBtn.addEventListener("click", async () => {
     try {
       handoffBtn.disabled = true;
       statusEl.className = "llm-status-text";
-      statusEl.textContent = "Extracting session turns...";
 
-      const session = extractConversation();
+      const session = cachedSession || (await extractConversation());
       if (!session.turns || session.turns.length === 0) {
         statusEl.className = "llm-status-text error";
         statusEl.textContent = "No conversation turns detected on this page.";
@@ -251,40 +450,60 @@
         return;
       }
 
-      statusEl.textContent = `Compacting ${session.turns.length} turns via local daemon...`;
+      const note = noteInput ? noteInput.value.trim() : "";
+      let data = null;
 
-      // Dispatch to local continuity daemon
-      const response = await fetch("http://127.0.0.1:4141/api/handoff", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: session.title,
-          source: session.platform,
-          target: selectedTarget,
-          messages: session.turns,
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `HTTP ${response.status} from daemon`);
+      // Check if pre-warmed promise is valid and matches selected target
+      if (prewarmedPromise && prewarmedTarget === selectedTarget && !note) {
+        statusEl.textContent = "Applying pre-warmed state (<50ms)...";
+        data = await prewarmedPromise;
       }
 
-      const data = await response.json();
+      if (!data) {
+        statusEl.textContent = `Compacting ${session.turns.length} turns via local daemon...`;
+        const response = await fetch("http://127.0.0.1:4141/api/handoff", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: session.title,
+            source: session.platform,
+            target: selectedTarget,
+            messages: session.turns,
+            nextStepNote: note || undefined,
+          }),
+        });
 
-      // Copy handoff envelope to clipboard
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.error || `HTTP ${response.status} from daemon`);
+        }
+
+        data = await response.json();
+      }
+
+      // Store in chrome.storage.local for Target Tab Auto-Fill
+      if (chrome.storage && chrome.storage.local) {
+        await chrome.storage.local.set({
+          pending_handoff: {
+            envelope: data.envelope,
+            target: selectedTarget,
+            createdAt: Date.now(),
+          },
+        });
+      }
+
+      // Also copy handoff envelope to clipboard
       await navigator.clipboard.writeText(data.envelope);
 
       statusEl.className = "llm-status-text success";
-      statusEl.textContent = "✓ Copied 3-line handshake! Opening tab...";
+      statusEl.textContent = data.cached ? "✓ Copied state (<2ms cache)! Opening tab..." : "✓ State ready! Opening tab...";
 
-      // Destination URL
       const targetUrl =
         selectedTarget === "claude"
           ? "https://claude.ai/new"
           : selectedTarget === "gemini"
           ? "https://gemini.google.com/app"
-          : "https://chatgpt.com";
+          : "https://chatgpt.com/";
 
       // Request background service worker to open new target tab
       chrome.runtime.sendMessage({ action: "open_target_tab", url: targetUrl });
@@ -295,7 +514,9 @@
         handoffBtn.disabled = false;
         card.classList.remove("open");
         pill.style.display = "flex";
-      }, 3500);
+        cachedSession = null;
+        prewarmedPromise = null;
+      }, 3000);
     } catch (err) {
       statusEl.className = "llm-status-text error";
       statusEl.textContent =
@@ -305,4 +526,85 @@
       handoffBtn.disabled = false;
     }
   });
+
+  // 9. Floating Toast Notification
+  function showToast(message) {
+    const toast = document.createElement("div");
+    toast.className = "llm-toast";
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 6000);
+  }
+
+  // 10. Auto-Fill Target Tab Prompt Box
+  async function checkPendingHandoffAutoFill() {
+    if (!chrome.storage || !chrome.storage.local) return;
+
+    try {
+      const data = await chrome.storage.local.get("pending_handoff");
+      if (!data || !data.pending_handoff) return;
+
+      const { envelope, target, createdAt } = data.pending_handoff;
+      if (Date.now() - createdAt > 45000) {
+        await chrome.storage.local.remove("pending_handoff");
+        return;
+      }
+
+      const currentPlatform = getPlatform();
+      if (
+        (target === "claude" && currentPlatform === "claude") ||
+        (target === "gemini" && currentPlatform === "gemini") ||
+        (target === "chatgpt" && currentPlatform === "chatgpt")
+      ) {
+        await chrome.storage.local.remove("pending_handoff");
+        attemptAutoFill(envelope);
+      }
+    } catch (e) {
+      // Storage access error handling
+    }
+  }
+
+  function attemptAutoFill(envelope) {
+    const startTime = Date.now();
+    const maxWait = 8000;
+
+    const interval = setInterval(() => {
+      let editor = null;
+
+      // Claude
+      editor = document.querySelector('div.ProseMirror[contenteditable="true"]');
+      // Gemini
+      if (!editor) {
+        editor =
+          document.querySelector('.ql-editor[contenteditable="true"]') ||
+          document.querySelector('rich-textarea [contenteditable="true"]') ||
+          document.querySelector('textarea.textarea');
+      }
+      // ChatGPT
+      if (!editor) {
+        editor =
+          document.querySelector('#prompt-textarea') ||
+          document.querySelector('div[contenteditable="true"]#prompt-textarea');
+      }
+
+      if (editor) {
+        clearInterval(interval);
+        if (editor.tagName === "TEXTAREA" || editor.tagName === "INPUT") {
+          editor.value = envelope;
+          editor.dispatchEvent(new Event("input", { bubbles: true }));
+          editor.dispatchEvent(new Event("change", { bubbles: true }));
+        } else {
+          editor.focus();
+          document.execCommand("insertText", false, envelope);
+          if (!editor.textContent || editor.textContent.trim().length === 0) {
+            editor.innerText = envelope;
+          }
+          editor.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+        showToast("✓ Handoff Auto-Filled! Press Enter to continue.");
+      } else if (Date.now() - startTime > maxWait) {
+        clearInterval(interval);
+      }
+    }, 400);
+  }
 })();

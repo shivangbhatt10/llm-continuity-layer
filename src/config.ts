@@ -15,7 +15,7 @@ export interface Config {
 }
 
 export const DEFAULT_CHEAP_MODEL = "gemini-3.1-flash-lite";
-export const DEFAULT_STRONG_MODEL = "gemini-3.8-flash";
+export const DEFAULT_STRONG_MODEL = "gemini-3.1-flash-lite";
 
 /**
  * Loads and resolves runtime configuration from the provided environment dictionary.

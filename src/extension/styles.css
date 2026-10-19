@@ -130,8 +130,8 @@
 
 .llm-target-options {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
 }
 
 .llm-target-btn {
@@ -205,4 +205,60 @@
 
 .llm-status-text.error {
   color: #f87171;
+}
+
+/* Custom Next-Step Note Input */
+.llm-input-note {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  margin-top: 4px;
+  background: rgba(30, 41, 59, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 8px;
+  color: #f8fafc;
+  font-size: 12px;
+  outline: none;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+
+.llm-input-note:focus {
+  border-color: #38bdf8;
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+}
+
+.llm-input-note::placeholder {
+  color: #64748b;
+}
+
+/* Auto-Fill Notification Toast */
+.llm-toast {
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  z-index: 2147483647;
+  padding: 12px 20px;
+  background: rgba(6, 78, 59, 0.95);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid #10b981;
+  border-radius: 12px;
+  color: #ecfdf5;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+  animation: llmSlideDown 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+@keyframes llmSlideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }

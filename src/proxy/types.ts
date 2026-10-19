@@ -1,13 +1,14 @@
 import type { Role, ConversationType, LLMClient } from "../core/schema.js";
-import type { TargetFormat } from "../deliver/formatters/index.js";
+import type { TargetProvider } from "../deliver/formatters/index.js";
 import type { ConversationStore } from "../store/db.js";
 
 export interface HandoffRequest {
   title?: string;
   source?: string;
   messages: Array<{ role: Role; content: string; id?: string; ts?: number }>;
-  target?: TargetFormat;
+  target?: TargetProvider;
   dryRun?: boolean;
+  nextStepNote?: string;
 }
 
 export interface HandoffResponse {
@@ -15,11 +16,12 @@ export interface HandoffResponse {
   conversation_id: string;
   title: string;
   types: ConversationType[];
-  target: TargetFormat;
+  target: TargetProvider;
   envelope: string;
   next_step: string;
   artifact_count: number;
   created_at: number;
+  cached?: boolean;
 }
 
 export interface ChatMessage {

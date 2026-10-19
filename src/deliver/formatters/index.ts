@@ -6,7 +6,7 @@ export * from "./base.js";
 export * from "./claude.js";
 export * from "./gemini.js";
 
-export type TargetProvider = "claude" | "gemini" | "markdown";
+export type TargetProvider = "claude" | "gemini" | "chatgpt" | "markdown";
 
 /**
  * Formats a State Capsule into a target provider handoff envelope (Section 3.3).
@@ -19,6 +19,7 @@ export function formatCapsule(
     case "claude":
       return formatClaudeCapsule(capsule);
     case "gemini":
+    case "chatgpt":
     case "markdown":
     default:
       return formatGeminiCapsule(capsule);

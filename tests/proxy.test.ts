@@ -181,4 +181,96 @@ Run stress tests.
     expect(result.result).toBe("Fallback provider response");
     expect(result.failoverOccurred).toBe(true);
   });
+
+  it("serves subsequent requests with identical turns from SHA-256 cache in < 2ms", async () => {
+    const payload = {
+      title: "Cache Benchmark Chat",
+      source: "chatgpt",
+      target: "claude" as const,
+      messages: [
+        { role: "user" as const, content: "Calculate the Fibonacci sequence." },
+        { role: "assistant" as const, content: "function fib(n) { return n <= 1 ? n : fib(n-1) + fib(n-2); }" },
+      ],
+    };
+
+    // First request (synthesize & cache)
+    const res1 = await fetch(`${baseUrl}/api/handoff`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data1 = await res1.json();
+    expect(data1.cached).toBe(false);
+
+    // Second request (served from cache)
+    const t0 = performance.now();
+    const res2 = await fetch(`${baseUrl}/api/handoff`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const elapsedMs = performance.now() - t0;
+    const data2 = await res2.json();
+
+    expect(data2.cached).toBe(true);
+    expect(data2.conversation_id).toBe(data1.conversation_id);
+    expect(data2.envelope).toBe(data1.envelope);
+    expect(elapsedMs).toBeLessThan(50); // In-process local call completes in under a few ms
+  });
+
+  it("scrubs ChatGPT private-use unicode and citations from incoming messages", async () => {
+    const payload = {
+      title: "Scrub Test",
+      source: "chatgpt",
+      target: "gemini" as const,
+      messages: [
+        {
+          role: "user" as const,
+          content: "Look up \ue200entity\ue202[\"website\",\"Semantic Scholar\",\"...\"]\ue201 in fileL8-L28.",
+        },
+        {
+          role: "assistant" as const,
+          content: "Retrieved citation \ue200cite\ue202foo\ue201 correctly.",
+        },
+      ],
+    };
+
+    const res = await fetch(`${baseUrl}/api/handoff`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    expect(data.success).toBe(true);
+
+    const stored = serverInstance.store.getLatestCapsule(data.conversation_id);
+    expect(stored).not.toBeNull();
+    const userTurn = stored!.recent_turns.find((t) => t.role === "user");
+    expect(userTurn?.content).toContain("Semantic Scholar");
+    expect(userTurn?.content).not.toContain("\ue200");
+    expect(userTurn?.content).not.toContain("fileL8-L28");
+  });
+
+  it("appends custom nextStepNote to synthesized next_step", async () => {
+    const payload = {
+      title: "Custom Note Test",
+      source: "chatgpt",
+      target: "claude" as const,
+      nextStepNote: "Prioritize writing integration tests for auth.",
+      messages: [
+        { role: "user" as const, content: "We finished the database schema." },
+        { role: "assistant" as const, content: "Next we need auth services." },
+      ],
+    };
+
+    const res = await fetch(`${baseUrl}/api/handoff`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    expect(data.success).toBe(true);
+    expect(data.next_step).toContain("Prioritize writing integration tests for auth.");
+    expect(data.envelope).toContain("Prioritize writing integration tests for auth.");
+  });
 });

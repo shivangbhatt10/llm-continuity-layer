@@ -1,10 +1,12 @@
 import http from "node:http";
+import crypto from "node:crypto";
 import type { Socket } from "node:net";
-import type { Conversation, LLMClient, Message, Role } from "../core/schema.js";
+import type { Capsule, Conversation, LLMClient, Role } from "../core/schema.js";
 import { synthesizeCapsule } from "../core/capsule.js";
 import { formatCapsule } from "../deliver/formatters/index.js";
 import { SQLiteStore, type ConversationStore } from "../store/db.js";
 import { GeminiClient, ScriptedLLM } from "../core/llm.js";
+import { scrubChatGPTUnicodeAndCitations } from "../ingest/unicode_scrubber.js";
 import config from "../config.js";
 import type {
   HandoffRequest,
@@ -18,6 +20,7 @@ import { executeWithFailover } from "./failover.js";
 export interface ContinuityServerInstance {
   server: http.Server;
   store: ConversationStore;
+  cache: Map<string, Capsule>;
   listen(port?: number): Promise<number>;
   close(): Promise<void>;
 }
@@ -79,6 +82,8 @@ export async function createContinuityServer(
       : new GeminiClient());
 
   const activeSockets = new Set<Socket>();
+  // In-memory SHA-256 Turn-Hash Cache (Milestone M12 God-Speed)
+  const capsuleCache = new Map<string, Capsule>();
 
   const server = http.createServer(async (req, res) => {
     // 1. CORS Preflight
@@ -106,6 +111,7 @@ export async function createContinuityServer(
           strong_model: config.strongModel,
           is_offline: config.isOffline,
           has_api_key: !config.isOffline,
+          cache_size: capsuleCache.size,
         });
         return;
       }
@@ -120,27 +126,65 @@ export async function createContinuityServer(
         }
 
         const target = payload.target || "claude";
+
+        // Compute SHA-256 cache key across raw turns + custom nextStepNote
+        const cacheHash = crypto
+          .createHash("sha256")
+          .update(JSON.stringify(payload.messages) + "::" + (payload.nextStepNote || ""))
+          .digest("hex");
+
+        // God-Speed Cache Hit (< 2ms)
+        if (capsuleCache.has(cacheHash)) {
+          const cachedCapsule = capsuleCache.get(cacheHash)!;
+          const envelope = formatCapsule(cachedCapsule, target);
+
+          const response: HandoffResponse = {
+            success: true,
+            conversation_id: cachedCapsule.conversation_id,
+            title: cachedCapsule.title,
+            types: cachedCapsule.types,
+            target,
+            envelope,
+            next_step: cachedCapsule.next_step,
+            artifact_count: cachedCapsule.artifacts.length,
+            created_at: cachedCapsule.created_at,
+            cached: true,
+          };
+
+          sendJson(res, 200, response);
+          return;
+        }
+
         const title = payload.title || payload.messages[0]?.content.slice(0, 60).replace(/\n/g, " ") || "Browser Handoff";
         const convId = `ext-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+
+        // M12: Scrub incoming extension messages (U+E200 entity/cite cleaner and fileL.. scrubber)
+        const scrubbedMessages = payload.messages.map((m, idx) => ({
+          role: m.role as Role,
+          content: scrubChatGPTUnicodeAndCitations(m.content).text,
+          id: m.id || `m-${idx}`,
+          ts: m.ts || Date.now(),
+        }));
 
         const conv: Conversation = {
           id: convId,
           source: payload.source || "extension",
           title,
-          messages: payload.messages.map((m, idx) => ({
-            role: m.role as Role,
-            content: m.content,
-            id: m.id || `m-${idx}`,
-            ts: m.ts || Date.now(),
-          })),
+          messages: scrubbedMessages,
           created_at: Date.now(),
           meta: { client: "chrome-extension" },
         };
 
-        // Synthesize capsule
-        const capsule = await synthesizeCapsule(conv, llm);
+        // Synthesize capsule with zero-latency classification (fastMode)
+        const capsule = await synthesizeCapsule(conv, llm, {
+          fastMode: true,
+          customNextStep: payload.nextStepNote,
+        });
+
         // Persist to SQLite Working Memory
         store.saveCapsule(capsule);
+        // Save in-memory cache
+        capsuleCache.set(cacheHash, capsule);
 
         // Format for selected target provider
         const envelope = formatCapsule(capsule, target);
@@ -155,6 +199,7 @@ export async function createContinuityServer(
           next_step: capsule.next_step,
           artifact_count: capsule.artifacts.length,
           created_at: capsule.created_at,
+          cached: false,
         };
 
         sendJson(res, 200, response);
@@ -256,6 +301,7 @@ export async function createContinuityServer(
   return {
     server,
     store,
+    cache: capsuleCache,
     listen(port = options.port ?? 4141): Promise<number> {
       return new Promise((resolve, reject) => {
         server.listen(port, options.host || "127.0.0.1", () => {

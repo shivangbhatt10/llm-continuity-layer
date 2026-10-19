@@ -22,6 +22,11 @@ export function heuristicClassify(text: string): ConversationType[] {
     lower.includes("exception") ||
     lower.includes("bug") ||
     lower.includes("fail") ||
+    lower.includes("disconnect") ||
+    lower.includes("timeout") ||
+    lower.includes("crash") ||
+    lower.includes("issue") ||
+    lower.includes("fatal") ||
     lower.includes("cannot read properties") ||
     lower.includes("undefined") ||
     lower.includes("segfault");

@@ -127,5 +127,57 @@ Update heartbeat interval to 30s.
       // Recent turns attached
       expect(capsule.recent_turns.length).toBe(2);
     });
+
+    it("replaces large code blocks (>6 lines) in recent turns with artifact placeholder", () => {
+      const code10Lines = [
+        "const a = 1;",
+        "const b = 2;",
+        "const c = 3;",
+        "const d = 4;",
+        "const e = 5;",
+        "const f = 6;",
+        "const g = 7;",
+        "const h = 8;",
+      ].join("\n");
+
+      const messages: Message[] = [
+        { role: "user", content: "Can you review this code?" },
+        {
+          role: "assistant",
+          content: `Here is the code:\n\`\`\`typescript\n${code10Lines}\n\`\`\``,
+        },
+      ];
+
+      const turns = selectRecentTurns(messages, 4000);
+      expect(turns[1].content).toContain("[See verbatim code in Artifacts section above]");
+      expect(turns[1].content).not.toContain("const a = 1;");
+    });
+
+    it("pins verbatim errors and highlights user pivots in synthesis prompt", async () => {
+      const scripted = new ScriptedLLM();
+      scripted.onTask("capsule", "## Goal\nFix crash.\n\n## Next Step\nDone.");
+
+      const conversation: Conversation = {
+        id: "c-err-1",
+        source: "scraped_md",
+        title: "Crash Report",
+        messages: [
+          { role: "user", content: "Wait, actually that failed with Error: ETIMEDOUT connect 127.0.0.1:6379" },
+          { role: "assistant", content: "Investigating..." },
+        ],
+        meta: {},
+      };
+
+      await synthesizeCapsule(conversation, scripted);
+
+      const capsuleCall = scripted.history.find((h) => h.options?.task === "capsule");
+      const promptSent = capsuleCall?.prompt || "";
+
+      // Verbatim error pinned
+      expect(promptSent).toContain("DETECTED VERBATIM ERRORS");
+      expect(promptSent).toContain("Error: ETIMEDOUT connect 127.0.0.1:6379");
+      // Pivot highlighted
+      expect(promptSent).toContain("[⚠️ USER CONSTRAINT / PIVOT]:");
+    });
   });
 });
