@@ -104,4 +104,36 @@ describe("SQLite Working Memory Store (Section 4 & Schema)", () => {
     expect(historicalV2?.version).toBe(2);
     expect(historicalV2?.next_step).toBe("Step 2");
   });
+
+  it("retrieves the latest overall capsule across all conversations", () => {
+    store.saveCapsule({ ...sampleCapsule, conversation_id: "conv-1", created_at: 1000 });
+    store.saveCapsule({ ...sampleCapsule, conversation_id: "conv-2", title: "Latest Title", created_at: 2000 });
+
+    const latest = store.getLatestOverallCapsule();
+    expect(latest).not.toBeNull();
+    expect(latest?.conversation_id).toBe("conv-2");
+    expect(latest?.title).toBe("Latest Title");
+  });
+
+  it("lists sessions with source and search sessions by keyword", () => {
+    store.saveCapsule({
+      ...sampleCapsule,
+      conversation_id: "conv-redis",
+      title: "Redis Cluster Mutex",
+      sections: { Goal: "Resolve Redlock timeouts" },
+      next_step: "Run drift test",
+    });
+
+    const sessions = store.listSessions();
+    expect(sessions.length).toBe(1);
+    expect(sessions[0].source).toBe("chatgpt");
+
+    const searchHits = store.searchSessions("Redlock");
+    expect(searchHits.length).toBe(1);
+    expect(searchHits[0].conversation_id).toBe("conv-redis");
+    expect(searchHits[0].matchSnippet).toContain("Goal: Resolve Redlock timeouts");
+
+    const emptyHits = store.searchSessions("nonexistent_term");
+    expect(emptyHits.length).toBe(0);
+  });
 });

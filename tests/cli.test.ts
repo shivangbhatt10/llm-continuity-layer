@@ -92,10 +92,17 @@ CREATE TABLE events (
     expect(res.stdout).toContain("gemini-3.8-flash");
   });
 
-  it("ml --help displays usage including ml serve command", async () => {
+  it("ml --help displays usage including ml serve and ml mcp command", async () => {
     const res = await runCLI(["--help"]);
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toContain("ml serve [options]");
+    expect(res.stdout).toContain("ml mcp [options]");
     expect(res.stdout).toContain("--port <number>");
+  });
+
+  it("ml mcp command starts MCP server and reports startup", async () => {
+    const res = await runCLI(["mcp", "--db", dbPath]);
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("Continuity MCP Server started on stdio");
   });
 });

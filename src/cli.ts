@@ -35,7 +35,11 @@ Usage:
   ml capsule <path> [options]              Synthesize a State Capsule
   ml show <id> [options]                   Inspect a saved capsule in SQLite store
   ml serve [options]                       Start Continuity Daemon & Proxy server
+  ml mcp [options]                         Start Model Context Protocol (MCP) server on stdio
   ml models                                List supported Gemini frontier models
+
+Options for 'mcp':
+  --db <path>                              SQLite database path (default: continuity.db)
 
 Options for 'serve':
   --port <number>                          HTTP port to listen on (default: 4141)
@@ -203,6 +207,37 @@ Options for 'capsule':
               resolve();
             });
           });
+        }
+        break;
+      }
+
+      case "mcp": {
+        const dbArg = args.indexOf("--db");
+        const dbPath = dbArg !== -1 && args[dbArg + 1] ? args[dbArg + 1] : "continuity.db";
+
+        const { createContinuityMcpServer } = await import("./mcp/server.js");
+        const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");
+
+        const { server, store } = createContinuityMcpServer({ dbPath });
+        const transport = new StdioServerTransport();
+
+        await server.connect(transport);
+        if (isMain) {
+          console.error(`[Continuity MCP] Server running on stdio (database: ${dbPath})`);
+          await new Promise<void>((resolve) => {
+            process.on("SIGINT", () => {
+              store.close();
+              resolve();
+            });
+            process.on("SIGTERM", () => {
+              store.close();
+              resolve();
+            });
+          });
+          return { stdout: "", stderr: "", exitCode: 0 };
+        } else {
+          log(`Continuity MCP Server started on stdio (db: ${dbPath})`);
+          store.close();
         }
         break;
       }

@@ -345,3 +345,32 @@ This log records architectural decisions, rationale, deviations, and edge cases 
   - *Hardcoded DOM selectors only*: Prone to breaking whenever web UIs update their design systems.
 - **Consequences**:
   - Sub-second (<2s cold, <50ms pre-warmed, <2ms cached) end-to-end handoff execution with zero manual paste friction.
+
+---
+
+## ADR-0015: Model Context Protocol (MCP) Server for AI Developer Harnesses
+
+- **Date**: 2026-11-19
+- **Status**: Accepted
+- **Context**:
+  Modern developers frequently switch between browser Web UIs (ChatGPT, Claude.ai, Gemini) and terminal/IDE coding agents (Claude Code, Antigravity IDE, Cursor, Windsurf, OpenClaw).
+  Without a standardized agent interface:
+  1. Terminal agents cannot read active session context from `continuity.db` without custom shell scripts or manual copy-pasting.
+  2. Code produced by IDE agents cannot be saved back into working memory to resume in the browser.
+  3. The Model Context Protocol (MCP) has emerged as the universal standard for exposing agent tools over JSON-RPC.
+- **Decision**:
+  1. Implement an MCP Server in `src/mcp/server.ts` utilizing `@modelcontextprotocol/sdk` and `zod`.
+  2. Expose 4 core tools:
+     - `get_latest_handoff`: Retrieves the formatted capsule (with 3-line handshake) in Claude XML, Gemini Markdown, or raw JSON.
+     - `list_saved_sessions`: Lists all stored conversation sessions with versions and timestamps.
+     - `search_sessions`: Searches across titles, goals, decisions, constraints, and next steps with preview snippets.
+     - `save_checkpoint`: Saves state checkpoints and code artifacts directly from the harness into `continuity.db`.
+  3. Implement `src/mcp/index.ts` connecting over `StdioServerTransport` with clean standard error logging.
+  4. Wire `ml mcp [--db <path>]` into `src/cli.ts` for simple, 1-line harness registration.
+  5. Provide `MCP_GUIDE.md` detailing configurations and usage prompts for Claude Code, Antigravity IDE, OpenClaw, and Cursor.
+- **Alternatives Rejected**:
+  - *Custom CLI subcommands only*: Requires agents to invoke shell commands and parse unformatted terminal output rather than native structured JSON-RPC tool calls.
+  - *Direct SQLite file sharing across processes without an MCP server*: Leads to SQLite database locking errors and lack of schema validation.
+- **Consequences**:
+  - Seamless bidirectional bridge between browser chat sessions and terminal/IDE AI developer harnesses.
+

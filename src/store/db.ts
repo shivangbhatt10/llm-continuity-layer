@@ -12,11 +12,22 @@ export interface CapsuleSummary {
   created_at: number;
 }
 
+export interface SessionSummary extends CapsuleSummary {
+  source: string;
+}
+
+export interface SessionSearchResult extends SessionSummary {
+  matchSnippet: string;
+}
+
 export interface ConversationStore {
   saveCapsule(capsule: Capsule): VersionedCapsule;
   getLatestCapsule(conversationId: string): VersionedCapsule | null;
+  getLatestOverallCapsule?(): VersionedCapsule | null;
   getCapsuleByVersion(conversationId: string, version: number): VersionedCapsule | null;
   listCapsules(): CapsuleSummary[];
+  listSessions?(limit?: number): SessionSummary[];
+  searchSessions?(query: string, limit?: number): SessionSearchResult[];
   close(): void;
 }
 
@@ -144,6 +155,105 @@ export class SQLiteStore implements ConversationStore {
       version: Number(r.version),
       created_at: Number(r.created_at),
     }));
+  }
+
+  getLatestOverallCapsule(): VersionedCapsule | null {
+    const stmt = this.db.prepare(`
+      SELECT * FROM capsules 
+      ORDER BY created_at DESC, id DESC 
+      LIMIT 1
+    `);
+    const row = stmt.get() as Record<string, unknown> | undefined;
+    if (!row) return null;
+
+    return this.hydrateCapsule(row);
+  }
+
+  listSessions(limit: number = 10): SessionSummary[] {
+    const stmt = this.db.prepare(`
+      SELECT c.conversation_id, c.title, c.source, c.version, c.created_at
+      FROM capsules c
+      INNER JOIN (
+        SELECT conversation_id, MAX(version) as max_version
+        FROM capsules
+        GROUP BY conversation_id
+      ) m ON c.conversation_id = m.conversation_id AND c.version = m.max_version
+      ORDER BY c.created_at DESC
+      LIMIT ?
+    `);
+    const rows = stmt.all(limit) as Array<{
+      conversation_id: string;
+      title: string;
+      source: string;
+      version: number;
+      created_at: number;
+    }>;
+
+    return rows.map((r) => ({
+      conversation_id: String(r.conversation_id),
+      title: String(r.title),
+      source: String(r.source),
+      version: Number(r.version),
+      created_at: Number(r.created_at),
+    }));
+  }
+
+  searchSessions(query: string, limit: number = 10): SessionSearchResult[] {
+    const term = `%${query.toLowerCase()}%`;
+    const stmt = this.db.prepare(`
+      SELECT c.conversation_id, c.title, c.source, c.version, c.created_at, c.sections, c.next_step
+      FROM capsules c
+      INNER JOIN (
+        SELECT conversation_id, MAX(version) as max_version
+        FROM capsules
+        GROUP BY conversation_id
+      ) m ON c.conversation_id = m.conversation_id AND c.version = m.max_version
+      WHERE LOWER(c.title) LIKE ? 
+         OR LOWER(c.sections) LIKE ? 
+         OR LOWER(c.next_step) LIKE ?
+      ORDER BY c.created_at DESC
+      LIMIT ?
+    `);
+    const rows = stmt.all(term, term, term, limit) as Array<{
+      conversation_id: string;
+      title: string;
+      source: string;
+      version: number;
+      created_at: number;
+      sections: string;
+      next_step: string;
+    }>;
+
+    return rows.map((r) => {
+      let snippet = "";
+      const q = query.toLowerCase();
+      try {
+        const sectionsObj = JSON.parse(r.sections) as Record<string, string>;
+        for (const [secTitle, secBody] of Object.entries(sectionsObj)) {
+          if (secBody.toLowerCase().includes(q)) {
+            snippet = `${secTitle}: ${secBody.slice(0, 140)}...`;
+            break;
+          }
+        }
+      } catch {
+        // ignore JSON parse error
+      }
+      if (!snippet && r.next_step.toLowerCase().includes(q)) {
+        snippet = `Next Step: ${r.next_step.slice(0, 140)}...`;
+      }
+      if (!snippet) {
+        snippet = `Title: ${r.title}`;
+      }
+
+      return {
+        conversation_id: String(r.conversation_id),
+        title: String(r.title),
+        source: String(r.source),
+        version: Number(r.version),
+        created_at: Number(r.created_at),
+        matchSnippet: snippet,
+      };
+    });
   }
 
   private hydrateCapsule(row: Record<string, unknown>): VersionedCapsule {
